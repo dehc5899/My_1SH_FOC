@@ -1,0 +1,45 @@
+# --- MATLAB / Simulink temporary & autosave ---
+*.asv
+*.m~ 
+*.autosave
+slprj/
+*.slxc
+*.slxc.*
+*.slx.r*
+*.mdl.r*
+*.req~
+
+# --- Simulink code generation / build outputs ---
+**/slprj/
+**/sccprj/
+**/codegen/
+**/grt_rtw/
+**/ert_rtw/
+**/rsim/
+**/*.mex*
+**/*.obj
+**/*.o
+**/*.pdb
+**/*.ilk
+**/*.exe
+**/*.dll
+
+# --- MATLAB cache / project ---
+*.bak
+*.tmp
+*.log
+*.cache
+*.mat~ 
+*.fig~ 
+*.original
+
+f# --- Simulink data inspector / reports ---
+*.mldatx
+*.html
+*.pdf
+
+# --- OS / IDE junk ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
