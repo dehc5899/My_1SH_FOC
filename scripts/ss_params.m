@@ -116,16 +116,17 @@ p.ThetaOffset_rad = -pi/2;
 
 %% Startup align/ramp (Inc/drive_parameters.h PHASE1..5_DURATION /
 %% _FINAL_SPEED_UNIT / _FINAL_CURRENT_A, TRANSITION_DURATION)
-p.Startup_T   = [0.200 0.250 0.251 0.252 0.253];   % cumulative breakpoints, if inertia of rotor changes or the rotor start angle changes then make alignment time to 0.200
-p.Startup_RPM = [0 0 2500 2510 2520 2530];          % mechanical rpm at 0,T1..T5
+p.Startup_T   = [0.200, 0.220, 0.620, 0.621, 0.622, 0.623];   % cumulative breakpoints, if inertia of rotor changes or the rotor start angle changes then make alignment time to 0.200
+p.Startup_RPM = [0 0 0 2500 2510 2520 2530];          % mechanical rpm at 0,T1..T5
 p.Startup_Id_A = 10;      % PHASE1_FINAL_CURRENT_A - align, pure d
-p.Startup_Iq_A = 4;      % PHASE2..5_FINAL_CURRENT_A - ramp, pure q
+p.Startup_Iq_Breakaway_A = 10; % Phase 2 initial breakaway current (q-axis)
+p.Startup_Iq_A = 8;      % PHASE2..5_FINAL_CURRENT_A - ramp, pure q
 p.Startup_TransitionDuration = 0.025;
 
 %------Test Parameters------
 p.Idref_A=0;
 p.Iqref_A=2;    % negative Iq can turn the motor in negative direction
-p.LoadTorqueMag = 0.02;   % N*m braking magnitude, always opposes rotation
+p.LoadTorqueMag = 0.11;   % N*m braking magnitude, always opposes rotation
 %% Measured back-EMF reference speed (ss_bemf_data.m, ss_bemf_lookup.m)
 % Profile measured at 1000 RPM mechanical = 1000/60*POLE_PAIR_NUM Hz
 % electrical (works out to exactly 50 Hz - the same fe used as this

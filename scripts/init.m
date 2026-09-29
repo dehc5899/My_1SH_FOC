@@ -1,6 +1,16 @@
 clc;
 clear all;
 %addpath('bemf_profile');
+modelName = 'FOC_ctrl'; 
+% Check if the model is already loaded in memory; if not, load it quietly
+if ~bdIsLoaded(modelName)
+    load_system(modelName); 
+end
+% Set the active model context for any downstream commands
+model = modelName;
+fprintf('Model      : %s\n', model);
+fprintf('Version    : %s\n', get_param(model,'Description'));
+fprintf('Modified By: %s\n', get_param(model,'LastModifiedBy'));
 %............Select the PRODUCT............%
 Option.Product        = 4; % 1 = BDnano 2740, 2 = XX, 3 = BDnanoLite1, 4= BDnanaoLite 3000 (0 = BDnano 2740 with Trapedoidal BEMF)
 
