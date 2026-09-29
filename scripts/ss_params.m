@@ -262,7 +262,7 @@ p.STO_G2 = (a_ei - targetEig_sto^2) / b_ei; % V/A
 % this is the current balance point between "fast enough to lock on within
 % the real align/ramp window" and "slow enough to reject real-world
 % current-reconstruction/PWM ripple."
-p.PLL_BemfPeak_V = 6.568; % max(BEMF_shape_V) from ss_bemf_data.m, at p.BemfRefWe
+p.PLL_BemfPeak_V =7.48;%6.568; % max(BEMF_shape_V) from ss_bemf_data.m, at p.BemfRefWe
 pll_zeta = 0.707;
 pll_wn   = 2*pi*30; % rad/s, ~30 Hz PLL bandwidth
 
