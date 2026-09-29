@@ -130,12 +130,14 @@ elseif Option.Product == 4
     BDnano.Motor.Lm                           =  35e-6; % 
     BDnano.Motor.Ms                           =  64e-6; %
 
+    BDnano.Motor.Ld                           =43.5e-6;   % received Ld frm a colleague
+    BDnano.Motor.Lq                           =148.5e-6;  % received Lq frm a colleague
 
     BDnano.Motor.nMax_MaximalSpeedrpm         =       3000;
     BDnano.Motor.nMin_MinimalSpeedrpm         =       2300;
     BDnano.Motor.nNom_NominalSpeedrpm         =       2500;
     BDnano.Motor.PP_NumberOfPolePairs         =          3;
-    BDnano.Motor.R_StatorResistance           =        0.30;% theotitical resistance 0.14ohm in datasheet but real ,measurement 0.3ohm
+    BDnano.Motor.R_StatorResistance           =        0.17;% theotitical resistance 0.14ohm in datasheet but real ,measurement 0.3ohm
     BDnano.Motor.RotatingDirection            =          1;
     BDnano.Motor.Tcn_CoggingTorqueCoeff       =          0;
     BDnano.Motor.Tsn_CoggingTorqueCoeff       =          0;

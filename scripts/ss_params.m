@@ -116,7 +116,7 @@ p.ThetaOffset_rad = -pi/2;
 
 %% Startup align/ramp (Inc/drive_parameters.h PHASE1..5_DURATION /
 %% _FINAL_SPEED_UNIT / _FINAL_CURRENT_A, TRANSITION_DURATION)
-p.Startup_T   = [0.100 0.250 0.251 0.252 0.253];   % cumulative breakpoints, if inertia of rotor changes or the rotor start angle changes then make alignment time to 0.200
+p.Startup_T   = [0.200 0.250 0.251 0.252 0.253];   % cumulative breakpoints, if inertia of rotor changes or the rotor start angle changes then make alignment time to 0.200
 p.Startup_RPM = [0 0 2500 2510 2520 2530];          % mechanical rpm at 0,T1..T5
 p.Startup_Id_A = 10;      % PHASE1_FINAL_CURRENT_A - align, pure d
 p.Startup_Iq_A = 4;      % PHASE2..5_FINAL_CURRENT_A - ramp, pure q
