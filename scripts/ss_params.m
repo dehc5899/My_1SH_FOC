@@ -274,6 +274,7 @@ p.PLL_WeMax = 1.2 * (2*pi*(4500/60)*p.MotorPolePairs); % rad/s - 20% margin over
 p.PLL_OutUpper = p.PLL_WeMax;    p.PLL_OutLower = -p.PLL_WeMax;
 p.PLL_IntegUpper = p.PLL_OutUpper * p.PLL_KiDiv; p.PLL_IntegLower = -p.PLL_IntegUpper;
 
+
 %% Switchover trigger (ss_startup_trigger.m) - real firmware constants
 %% (Inc/drive_parameters.h): SPEED_BAND_LOWER_LIMIT=15,
 %% SPEED_BAND_UPPER_LIMIT=17 (percent - STO_PLL_IsObserverConverged
@@ -284,6 +285,9 @@ p.PLL_IntegUpper = p.PLL_OutUpper * p.PLL_KiDiv; p.PLL_IntegLower = -p.PLL_Integ
 %% build doesn't otherwise distinguish upper/lower speed-error direction.
 p.ConvergenceBand_Frac = 0.15;      % SPEED_BAND_LOWER_LIMIT/100
 p.ConvergenceConsecutiveSamples = 2; % NB_CONSECUTIVE_TESTS
+
+OBS_MINIMUM_SPEED_RPM= 2300;         % OBS_MINIMUM_SPEED_RPM = 2400
+p.MinStartUpValidSpeed =OBS_MINIMUM_SPEED_RPM*(2*pi/60) * 3;% observer output isn't trusted below this speed
 
 %% ---- Simulation timing mode ---------------------------------------------
 % Everything above is the exact firmware tick arithmetic. The real MCU resolves
