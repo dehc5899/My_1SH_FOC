@@ -18,7 +18,7 @@ p.AdvTimClk_Hz = 170e6;   % ADV_TIM_CLK_MHz
 p.AdcClk_Hz    = 42e6;    % ADC_CLK_MHz
 
 %% PWM / execution rate
-p.PwmFreq_Hz         = 12500;                                 % old=16000-PWM_FREQUENCY
+p.PwmFreq_Hz         = 16000;                                 % old=16000-PWM_FREQUENCY
 p.RegulationExecRate = 1;                                     % REGULATION_EXECUTION_RATE
 p.IsrFreq_Hz         = p.PwmFreq_Hz / p.RegulationExecRate;   % ISR_FREQUENCY_HZ
 p.Ts                 = 1 / p.IsrFreq_Hz;                       % <-- execution period of the whole
