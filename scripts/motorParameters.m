@@ -132,6 +132,8 @@ elseif Option.Product == 4
 
     BDnano.Motor.Ld                           =43.5e-6;   % received Ld frm a colleague
     BDnano.Motor.Lq                           =148.5e-6;  % received Lq frm a colleague
+    BDnano.Motor.Kt                           =0.021;     %torque constant of 0.021 N/A
+    BDnano.Motor.Ke                           =0.04954;     %K_e =0.014954  V/(rad/s)
 
     BDnano.Motor.nMax_MaximalSpeedrpm         =       3000;
     BDnano.Motor.nMin_MinimalSpeedrpm         =       2300;
