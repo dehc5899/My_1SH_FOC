@@ -11,6 +11,7 @@ model = modelName;
 fprintf('Model      : %s\n', model);
 fprintf('Version    : %s\n', get_param(model,'Description'));
 fprintf('Modified By: %s\n', get_param(model,'LastModifiedBy'));
+get_param('FOC_ctrl', 'Dirty')
 %............Select the PRODUCT............%
 Option.Product        = 4; % 1 = BDnano 2740, 2 = XX, 3 = BDnanoLite1, 4= BDnanaoLite 3000 (0 = BDnano 2740 with Trapedoidal BEMF)
 
