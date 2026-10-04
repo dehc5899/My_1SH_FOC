@@ -128,7 +128,7 @@ p.Idref_A=0;
 p.Iqref_A=2;    % negative Iq can turn the motor in negative direction
 %------Load Parameters------%
 p.LoadTorqueMag =    0.11;   % N*m braking magnitude, always opposes rotation
-p.UseFixedLoad =        0;   % 1 = Use the fixed constant torque, 0 = Use the dynamic scaled load torque from the Mechanics block
+p.UseFixedLoad =        1;   % 1 = Use the fixed constant torque, 0 = Use the dynamic scaled load torque from the Mechanics block
 p.LoadScalingFactor=  0.5;   % Set to 1.0 for full torque, 0.5 for half torque, 0.0 to nullify it
 p.loadRampSlope=        1;   % rate of incresase of load
 %% Measured back-EMF reference speed (ss_bemf_data.m, ss_bemf_lookup.m)

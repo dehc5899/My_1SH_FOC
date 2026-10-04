@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sensorless Observer &amp; PLL — How It Works</title>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#1c2331; --sub:#4b5568; --accent:#1f6feb; --accent2:#b5321f;
+    --panel:#f6f8fb; --border:#dbe2ec; --code:#eef1f6; --good:#1a7f37; --warn:#9a6700; --bad:#b5321f;
+  }
+  html,body{background:var(--bg); color:var(--ink); font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif; line-height:1.55; margin:0;}
+  .wrap{max-width:980px; margin:0 auto; padding:36px 24px 80px;}
+  h1{font-size:2.0rem; margin-bottom:.2em;}
+  h1 + p.subtitle{color:var(--sub); font-size:1.05rem; margin-top:0;}
+  h2{font-size:1.4rem; margin-top:2.6em; padding-top:.3em; border-top:1px solid var(--border);}
+  h3{font-size:1.12rem; margin-top:1.8em; color:var(--ink);}
+  p{margin:.9em 0;}
+  .callout{background:var(--panel); border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:6px; padding:14px 18px; margin:1.2em 0;}
+  .callout.good{border-left-color:var(--good);}
+  .callout.warn{border-left-color:var(--warn);}
+  .callout.bad{border-left-color:var(--bad);}
+  .callout .tag{font-weight:700; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; color:var(--sub); display:block; margin-bottom:.3em;}
+  figure{margin:1.6em 0; text-align:center;}
+  figure img{max-width:100%; border:1px solid var(--border); border-radius:6px; background:#fff;}
+  figure svg{max-width:100%; height:auto; background:#fff; border:1px solid var(--border); border-radius:6px;}
+  figcaption{color:var(--sub); font-size:.88rem; margin-top:.5em;}
+  code, .mono{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace; font-size:.92em; background:var(--code); padding:.12em .38em; border-radius:4px;}
+  pre{background:var(--code); border:1px solid var(--border); border-radius:6px; padding:14px 16px; overflow-x:auto; font-size:.86rem;}
+  pre code{background:none; padding:0;}
+  table{width:100%; border-collapse:collapse; margin:1.2em 0; font-size:.92rem;}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top;}
+  th{background:var(--panel); font-size:.82rem; text-transform:uppercase; letter-spacing:.03em; color:var(--sub);}
+  tr:hover td{background:#fafbfd;}
+  .badge{display:inline-block; font-size:.74rem; font-weight:700; padding:.15em .55em; border-radius:999px; color:#fff;}
+  .badge.same{background:var(--good);}
+  .badge.diff{background:var(--warn);}
+  .badge.reason{background:var(--sub);}
+  ul, ol{padding-left:1.4em;}
+  li{margin:.4em 0;}
+  .toc{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:18px 22px;}
+  .toc a{color:var(--accent); text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  .toc ol{margin:.3em 0;}
+  .flow-arrow{color:var(--sub); font-weight:700;}
+  .kicker{font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">My_1SH_FOC — internal reference</p>
+<h1>Sensorless Observer &amp; PLL — How It Works</h1>
+<p class="subtitle">What the two-stage estimator does, how it maps onto the ST firmware it was ported from, the runaway bug that broke the sensorless handoff, the fix, and what's still worth improving.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#overview">Where this sits in the control chain</a></li>
+<li><a href="#stage1">Stage 1 — the Luenberger current / back-EMF observer</a></li>
+<li><a href="#stage2">Stage 2 — the PLL (angle &amp; speed tracker)</a></li>
+<li><a href="#handoff">The startup-to-sensorless handoff</a></li>
+<li><a href="#bug">The bug: an unbounded estimate breaking the handoff</a></li>
+<li><a href="#honest">Where things actually stand now</a></li>
+<li><a href="#params">ST firmware (16&nbsp;kHz) vs. this model (12.5&nbsp;kHz)</a></li>
+<li><a href="#improve">How to improve performance further</a></li>
+<li><a href="#progress">Progress update — items 1–3 implemented</a></li>
+<li><a href="#bemfshape">Why the Bemf / <code>we_est</code> waveforms look like this</a></li>
+<li><a href="#gains">Observer (G1/G2) and PLL (Kp/Ki) gains, explained</a></li>
+</ol>
+</div>
+
+<h2 id="overview">1. Where this sits in the control chain</h2>
+<p>This drive doesn't have a position sensor feeding the control loop directly (a real sensor exists in this Simscape model for validation, selectable as <code>theta_source</code>, but the sensorless path is the one this document is about). Instead, the motor is started open-loop — forcing a known angle and current while nothing is measured yet — and control is handed over, part way through, to an angle <em>estimated</em> purely from the measured stator current and the voltage being commanded. That estimation is done in two stages, run back-to-back every 80&nbsp;µs control cycle:</p>
+
+<figure>
+<svg viewBox="0 0 920 260" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Consolas,monospace" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4b5568"/>
+    </marker>
+  </defs>
+  <!-- boxes -->
+  <rect x="10" y="90" width="120" height="60" rx="6" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="70" y="115" text-anchor="middle" font-weight="700">Measured</text>
+  <text x="70" y="132" text-anchor="middle">Ia, Ib, Ic</text>
+  <text x="70" y="147" text-anchor="middle" font-size="11" fill="#4b5568">(single-shunt)</text>
+
+  <line x1="130" y1="120" x2="175" y2="120" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="180" y="90" width="110" height="60" rx="6" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="235" y="115" text-anchor="middle" font-weight="700">Clarke</text>
+  <text x="235" y="132" text-anchor="middle">transform</text>
+  <text x="235" y="147" text-anchor="middle" font-size="11" fill="#4b5568">Ialpha, Ibeta</text>
+
+  <line x1="290" y1="120" x2="335" y2="120" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="340" y="30" width="200" height="220" rx="8" fill="#fff" stroke="#1f6feb" stroke-width="1.6"/>
+  <text x="440" y="52" text-anchor="middle" font-weight="700" fill="#1f6feb">STAGE 1</text>
+  <text x="440" y="70" text-anchor="middle" font-size="12">Luenberger observer</text>
+  <rect x="360" y="85" width="160" height="60" rx="5" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="440" y="108" text-anchor="middle">predict Ialpha,Ibeta</text>
+  <text x="440" y="124" text-anchor="middle" font-size="11" fill="#4b5568">from R, L, V, Bemf_est</text>
+  <line x1="440" y1="145" x2="440" y2="170" stroke="#4b5568" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="360" y="175" width="160" height="60" rx="5" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="440" y="198" text-anchor="middle">correct via G1, G2</text>
+  <text x="440" y="214" text-anchor="middle" font-size="11" fill="#4b5568">current-error feedback</text>
+
+  <line x1="540" y1="140" x2="585" y2="140" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="562" y="130" text-anchor="middle" font-size="11" fill="#4b5568">Bemf_est</text>
+
+  <rect x="590" y="30" width="200" height="220" rx="8" fill="#fff" stroke="#b5321f" stroke-width="1.6"/>
+  <text x="690" y="52" text-anchor="middle" font-weight="700" fill="#b5321f">STAGE 2</text>
+  <text x="690" y="70" text-anchor="middle" font-size="12">Phase-Locked Loop</text>
+  <rect x="610" y="85" width="160" height="55" rx="5" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="690" y="106" text-anchor="middle">phase detector</text>
+  <text x="690" y="122" text-anchor="middle" font-size="11" fill="#4b5568">sin(theta_true - theta_est)</text>
+  <line x1="690" y1="140" x2="690" y2="163" stroke="#4b5568" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="610" y="168" width="160" height="35" rx="5" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="690" y="190" text-anchor="middle" font-size="12">PI loop filter</text>
+  <line x1="690" y1="203" x2="690" y2="216" stroke="#4b5568" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="610" y="219" width="160" height="26" rx="5" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="690" y="237" text-anchor="middle" font-size="12">integrate -&gt; theta_est</text>
+
+  <line x1="790" y1="140" x2="835" y2="140" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="838" y="105" width="72" height="70" rx="6" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="874" y="130" text-anchor="middle" font-weight="700">theta_est</text>
+  <text x="874" y="146" text-anchor="middle" font-size="11" fill="#4b5568">to angle</text>
+  <text x="874" y="160" text-anchor="middle" font-size="11" fill="#4b5568">blend</text>
+
+  <!-- feedback we_est into stage1 -->
+  <path d="M690,245 C690,258 440,258 440,235" fill="none" stroke="#4b5568" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="565" y="256" text-anchor="middle" font-size="11" fill="#4b5568">we_est feeds back into Stage 1's rotation model</text>
+</svg>
+<figcaption>Fig. 1 — Signal flow: Stage 1 turns measured current into an estimated back-EMF vector; Stage 2 turns that vector into an angle and speed. The speed estimate closes the loop back into Stage 1.</figcaption>
+</figure>
+
+<p>This mirrors ST's own two-function split almost exactly: <code>ss_sto_observer_step.m</code> is the MATLAB port of <code>STO_PLL_CalcElAngle</code>'s Luenberger-observer half (from <code>Src/sto_pll_speed_pos_fdbk.c</code> in the reference firmware), and <code>ss_pll_step.m</code> is the port of the same function's PLL half.</p>
+
+<h2 id="stage1">2. Stage 1 — the Luenberger current / back-EMF observer</h2>
+<p><strong>In plain words:</strong> this piece knows the basic electrical equation of the motor (voltage = resistance×current + inductance×(rate of change of current) + back-EMF). Give it the voltage you're commanding and it can <em>predict</em> what the current should do next — but only if it already knows the back-EMF, which is exactly the thing we don't know yet. So it makes a guess, predicts the current from that guess, compares the prediction to the <em>real, measured</em> current, and uses the size and direction of that mismatch to nudge both its current estimate and its back-EMF guess closer to reality. Repeat 12,500 times a second and the back-EMF guess converges onto the truth.</p>
+
+<figure>
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Consolas,monospace" font-size="13">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4b5568"/></marker>
+  </defs>
+  <rect x="20" y="70" width="180" height="70" rx="6" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="110" y="98" text-anchor="middle" font-weight="700">PREDICT</text>
+  <text x="110" y="115" text-anchor="middle" font-size="11.5" fill="#4b5568">R-L circuit equation</text>
+  <text x="110" y="130" text-anchor="middle" font-size="11.5" fill="#4b5568">using guessed Bemf</text>
+
+  <line x1="200" y1="105" x2="255" y2="105" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <text x="227" y="95" text-anchor="middle" font-size="11">I_predicted</text>
+
+  <circle cx="285" cy="105" r="22" fill="#fff" stroke="#4b5568" stroke-width="1.6"/>
+  <text x="285" y="111" text-anchor="middle" font-size="16">−</text>
+
+  <line x1="285" y1="60" x2="285" y2="83" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <text x="285" y="45" text-anchor="middle" font-size="11">I_measured</text>
+
+  <line x1="307" y1="105" x2="355" y2="105" stroke="#4b5568" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <text x="331" y="95" text-anchor="middle" font-size="11">error</text>
+
+  <rect x="360" y="70" width="150" height="70" rx="6" fill="#eef1f6" stroke="#dbe2ec"/>
+  <text x="435" y="98" text-anchor="middle" font-weight="700">CORRECT</text>
+  <text x="435" y="115" text-anchor="middle" font-size="11.5" fill="#4b5568">× G1 -&gt; current est.</text>
+  <text x="435" y="130" text-anchor="middle" font-size="11.5" fill="#4b5568">× G2 -&gt; Bemf est.</text>
+
+  <path d="M510,90 C560,60 560,150 510,120" fill="none" stroke="#4b5568" stroke-width="1.4" marker-end="url(#arrow2)"/>
+  <text x="600" y="80" text-anchor="middle" font-size="11" fill="#4b5568">updates both</text>
+  <text x="600" y="94" text-anchor="middle" font-size="11" fill="#4b5568">estimates, fed</text>
+  <text x="600" y="108" text-anchor="middle" font-size="11" fill="#4b5568">back to PREDICT</text>
+  <text x="600" y="122" text-anchor="middle" font-size="11" fill="#4b5568">next cycle</text>
+
+  <path d="M110,140 C110,180 435,180 435,140" fill="none" stroke="#dbe2ec" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="272" y="196" text-anchor="middle" font-size="11" fill="#4b5568">runs once every 80 µs control cycle, forever</text>
+</svg>
+<figcaption>Fig. 2 — The predict/correct cycle at the heart of the Luenberger observer.</figcaption>
+</figure>
+
+<h3>Why the back-EMF estimate has to "rotate"</h3>
+<p>Back-EMF isn't a fixed value — it's a sinusoid spinning at the electrical speed. If the observer only ever nudged a static guess toward the current back-EMF, it would always be chasing a moving target and lagging behind. So the model gives the back-EMF estimate its own built-in rotation, at whatever speed the PLL currently believes the motor is spinning:</p>
+
+<pre><code>Bemf_alpha_next = Bemf_alpha + Ts·we_est·Bemf_beta   + G2·(current error, alpha axis)
+Bemf_beta_next  = Bemf_beta  − Ts·we_est·Bemf_alpha   + G2·(current error, beta axis)</code></pre>
+
+<p>The <code>Ts·we_est·Bemf_beta</code> / <code>−Ts·we_est·Bemf_alpha</code> pair is exactly a discrete rotation — it spins the (alpha, beta) vector by a small angle each step, at the estimated speed, without changing its length. The current-error correction term then just nudges that continuously-rotating vector to keep it aligned with reality.</p>
+
+<div class="callout">
+<span class="tag">Two separate gains, two separate jobs</span>
+<code>G1</code> corrects the <em>current</em> estimate — a direct, standard Luenberger correction, easy to validate since current is actually measured. <code>G2</code> corrects the <em>back-EMF</em> estimate — this is the part that lets the observer actually learn something it never measures directly. Get G2 wrong and the current estimate can still look fine while the back-EMF (and therefore the angle) is quietly wrong.
+</div>
+
+<h2 id="stage2">3. Stage 2 — the PLL (angle &amp; speed tracker)</h2>
+<p>Stage 1 hands Stage 2 a rotating vector (the estimated back-EMF). Stage 2's job is to keep a running angle guess, <code>theta_est</code>, locked onto that vector's actual direction — exactly what a phase-locked loop does with any rotating reference.</p>
+
+<figure>
+<svg viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Consolas,monospace" font-size="13">
+  <circle cx="220" cy="150" r="110" fill="none" stroke="#dbe2ec" stroke-width="1.2"/>
+  <line x1="110" y1="150" x2="330" y2="150" stroke="#dbe2ec" stroke-width="1"/>
+  <line x1="220" y1="40" x2="220" y2="260" stroke="#dbe2ec" stroke-width="1"/>
+  <text x="335" y="154" font-size="11" fill="#4b5568">alpha</text>
+  <text x="222" y="34" font-size="11" fill="#4b5568">beta</text>
+
+  <!-- true bemf vector -->
+  <line x1="220" y1="150" x2="308" y2="72" stroke="#1f6feb" stroke-width="2.2" marker-end="url(#arrow2)"/>
+  <text x="320" y="65" font-size="12" fill="#1f6feb" font-weight="700">Bemf_est (true direction)</text>
+
+  <!-- estimated theta axis (slightly off) -->
+  <line x1="220" y1="150" x2="300" y2="90" stroke="#b5321f" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="305" y="105" font-size="12" fill="#b5321f" font-weight="700">theta_est direction</text>
+
+  <!-- angle arc -->
+  <path d="M 260 118 A 50 50 0 0 0 264 110" fill="none" stroke="#4b5568" stroke-width="1.4"/>
+  <text x="272" y="118" font-size="12" fill="#4b5568">error</text>
+
+  <circle cx="220" cy="150" r="3" fill="#1c2331"/>
+
+  <text x="220" y="290" text-anchor="middle" font-size="12">phaseErr ≈ |Bemf| · sin(true angle − theta_est)</text>
+  <text x="220" y="308" text-anchor="middle" font-size="11" fill="#4b5568">zero exactly when theta_est locks onto the true direction</text>
+</svg>
+<figcaption>Fig. 3 — The phase detector projects the estimated Bemf vector against the current angle guess; the result is (to first order) proportional to how far off that guess is.</figcaption>
+</figure>
+
+<p>The exact formula used here is:</p>
+<pre><code>phaseErr = −( Bemf_alpha_est·sin(theta_est) + Bemf_beta_est·cos(theta_est) )</code></pre>
+<p>That sign combination isn't arbitrary — it was verified directly against ST's firmware: <code>STO_ExecutePLL()</code> is called as <code>STO_ExecutePLL(pHandle, hAux_Alfa, −hAux_Beta)</code> (note the negated beta term at the call site), and once that negation is carried through its internal <code>hAux1 − hAux2</code> computation, it reduces to exactly this same expression. An earlier cosine-based version of this formula (also still visible, commented out, in the code) turned out to have its zero-crossing 90° away from the true angle rather than <em>at</em> it — which was the source of a persistent ~90° lock error chased for a long time in an earlier version of this build.</p>
+
+<p>From there it's a standard PLL: a PI loop filter turns the phase error into a speed estimate, and a simple wrap-aware integrator turns that speed into the next angle guess — closing the loop both on itself (next cycle's phase detector) and back into Stage&nbsp;1 (as the rotation rate for the back-EMF model).</p>
+
+<h2 id="handoff">4. The startup-to-sensorless handoff</h2>
+<p>At standstill there's no back-EMF at all, so the observer has nothing to estimate yet — this is unavoidable, not a bug (see the flat mismatch during 0-200&nbsp;ms in Fig. 5 below). The drive therefore starts in open loop: it forces a known angle (<code>theta_forced</code>) and ramps up current and speed on a fixed schedule, giving the back-EMF a chance to appear and the observer a chance to converge <em>before anyone trusts it</em>. Once the ramp finishes, an angle blend smoothly hands control over from <code>theta_forced</code> to <code>theta_est</code> over a short transition window — this blended value, <code>theta_used</code>, is what actually drives commutation (Park/Rev-Park) from that point on.</p>
+
+<h2 id="bug">5. The bug: an unbounded estimate breaking the handoff</h2>
+<p>The symptom: the moment the handoff happened, the real motor would decelerate and stall, while the PLL's own speed estimate would rocket up and pin itself at its maximum output limit — completely disconnected from the real, stalled motor.</p>
+
+<div class="callout bad">
+<span class="tag">Root cause</span>
+This is a feedback loop, and feedback loops can overshoot when correcting themselves. Because the signal being chased (real back-EMF) genuinely grows with speed, a small overcorrection at low speed becomes a larger one at higher speed — and nothing in <code>ss_sto_observer_step.m</code> stopped that growth. The internal <code>Ialpha_est</code>/<code>Ibeta_est</code>/<code>Bemf_alpha_est</code>/<code>Bemf_beta_est</code> states could mathematically grow to any size at all.
+</div>
+
+<p>ST's real firmware never has this problem — not because its control theory is different, but because its numbers are stored in a fixed-size (16-bit) format, and the code additionally clamps these same internal states explicitly on every cycle:</p>
+<pre><code>/* sto_pll_speed_pos_fdbk.c, STO_PLL_CalcElAngle() */
+if (wBemf_alfa_est &gt;  INT16_MAX * hF2) wBemf_alfa_est =  INT16_MAX * hF2;
+if (wBemf_alfa_est &lt; -INT16_MAX * hF2) wBemf_alfa_est = -INT16_MAX * hF2;
+/* ...same for wBemf_beta_est, Ialfa_est, Ibeta_est ... */</code></pre>
+<p>This MATLAB/Simulink port used ordinary double-precision numbers, which have no such built-in ceiling — so that safety net was silently missing. The fix adds the physically-equivalent bound explicitly:</p>
+<pre><code>Ialpha_est_next     = min(max(Ialpha_est_next,     -p.MaxReadableCurrent_A),  p.MaxReadableCurrent_A);
+Ibeta_est_next      = min(max(Ibeta_est_next,      -p.MaxReadableCurrent_A),  p.MaxReadableCurrent_A);
+Bemf_alpha_est_next = min(max(Bemf_alpha_est_next, -p.PLL_BemfPeak_V*1.2),    p.PLL_BemfPeak_V*1.2);
+Bemf_beta_est_next  = min(max(Bemf_beta_est_next,  -p.PLL_BemfPeak_V*1.2),    p.PLL_BemfPeak_V*1.2);</code></pre>
+
+<p>Result — the motor now completes the sensorless handoff and holds steady speed instead of stalling:</p>
+<figure>
+<img src="observer_pll_doc_assets/speed_full_run.png" alt="Motor speed through startup, handoff, and steady running">
+<figcaption>Fig. 4 — Full run: open-loop ramp (0-0.65s) &rarr; sensorless handoff &rarr; steady closed-loop running at ~2300 RPM, with the clamp in place.</figcaption>
+</figure>
+
+<figure>
+<img src="observer_pll_doc_assets/angle_full_run.png" alt="Angle tracking over the full run">
+<figcaption>Fig. 5 — <code>theta_est</code> vs. the true angle over the whole run. During the align phase (0-200ms) there's genuinely nothing to lock onto — no back-EMF exists at standstill, so the mismatch here is expected, not an error. From the ramp onward, the two track together.</figcaption>
+</figure>
+
+<h2 id="honest">6. Where things actually stand now</h2>
+<p>The clamp fix is real and necessary — but it's honest to say what it did and didn't solve. Zooming into steady-state running:</p>
+
+<figure>
+<img src="observer_pll_doc_assets/angle_lock_zoom.png" alt="Zoomed angle tracking during steady running">
+<figcaption>Fig. 6 — <code>theta_est</code> tracks the true angle's average slope well, but visibly wobbles around it rather than sitting exactly on it.</figcaption>
+</figure>
+
+<figure>
+<img src="observer_pll_doc_assets/phase_error_full.png" alt="Phase detector error over the full run">
+<figcaption>Fig. 7 — <code>phaseErr</code> settles into a sustained oscillation of roughly ±9-12V during steady running — bounded, so it no longer breaks lock, but not small either.</figcaption>
+</figure>
+
+<figure>
+<img src="observer_pll_doc_assets/bemf_magnitude_clamped.png" alt="Estimated back-EMF magnitude pinned near the clamp bound">
+<figcaption>Fig. 8 — The estimated back-EMF magnitude spends almost the entire run pressed right up against the clamp ceiling (~12.7V, i.e. both axes near ±8.98V simultaneously) — not settling naturally below it. The true back-EMF at ~2300&nbsp;RPM, scaled from the motor's own measured profile, should only be about <strong>3.2&nbsp;V</strong>.</figcaption>
+</figure>
+
+<div class="callout warn">
+<span class="tag">What this means</span>
+The observer's own correction terms are still trying to push the back-EMF estimate well past its physically-sensible value — the clamp is now working continuously to hold it back, rather than only catching rare spikes. The clamp did its job (nothing runs away anymore, the motor stays in lock), but the underlying gain mismatch that was originally causing the runaway is still present underneath it; the clamp contains the symptom rather than removing the cause. That residual mismatch is very likely what's showing up as the ±9-12V phase-error ripple and the visible wobble in <code>theta_est</code>.
+</div>
+
+<h2 id="params">7. ST firmware (16&nbsp;kHz) vs. this model (12.5&nbsp;kHz)</h2>
+<p>The honest answer to "is it the same implementation, just at a different PWM frequency" is: <strong>no — the algorithm structure and the phase-detector sign convention match exactly, but several of the numeric gains were independently re-designed rather than carried over, and the fixed-point clamp had to be re-added by hand.</strong> Here's the full comparison:</p>
+
+<table>
+<tr><th>Aspect</th><th>ST firmware</th><th>This model</th><th></th></tr>
+<tr><td>PWM / control rate</td><td>16,000 Hz (<code>Ts</code>=62.5&nbsp;µs)</td><td>12,500 Hz (<code>Ts</code>=80&nbsp;µs)</td><td><span class="badge diff">different</span></td></tr>
+<tr><td>Number representation</td><td>16-bit fixed-point (<code>int16</code>/<code>int32</code>), inherently range-limited</td><td>Double-precision float, no inherent limit</td><td><span class="badge diff">different</span></td></tr>
+<tr><td>Phase detector formula</td><td><code>hAux1 − hAux2</code> with beta pre-negated at the call site = <code>−(Bemf_a·sinθ + Bemf_b·cosθ)</code></td><td><code>−(Bemf_alpha_est·sinθ + Bemf_beta_est·cosθ)</code></td><td><span class="badge same">same</span></td></tr>
+<tr><td>Motor Rs / Ls used</td><td>0.15&nbsp;Ω / 0.329&nbsp;mH (X5500 reference motor)</td><td>0.30&nbsp;Ω / 0.160&nbsp;mH (X5550 / BDnanoEV motor)</td><td><span class="badge diff">different motor</span></td></tr>
+<tr><td>Observer current-correction gain <code>G1</code></td><td><code>GAIN1/F1 = −24227/16384 = −1.4785</code></td><td><code>p.STO_G1 = −24227/16384</code> — direct, exact port</td><td><span class="badge same">same</span></td></tr>
+<tr><td>Observer back-EMF gain <code>G2</code></td><td><code>GAIN2/F2 = 19705/1024</code>, inside ST's own ADC-digit scaling chain</td><td>Re-designed via discrete pole-placement (critically-damped current-error dynamics) targeting this motor's own Rs/Ls/Ts &rarr; <code>p.STO_G2 ≈ 1.326 V/A</code></td><td><span class="badge reason">re-designed</span></td></tr>
+<tr><td>PLL loop-filter gains</td><td>Fixed integers <code>PLL_KP_GAIN=449</code>, <code>PLL_KI_GAIN=20</code> (with <code>KPDIV=16384</code>, <code>KIDIV=65535</code>) — <strong>one set of constants for the entire speed range, no scheduling</strong></td><td>Designed from &zeta;=0.707, &omega;n=2&pi;&times;30&nbsp;rad/s, normalized by a chosen Bemf reference voltage (<code>p.PLL_BemfPeak_V</code>)</td><td><span class="badge reason">re-designed</span></td></tr>
+<tr><td>Bemf reference point for gain normalization</td><td>Implicit in the fixed integer gains — presumably validated by ST across the whole application speed range</td><td>Currently 7.48&nbsp;V, chosen to represent the motor's back-EMF near its <em>maximum</em> speed (1.2&times;4500&nbsp;RPM equivalent) rather than a low reference — an earlier value (6.568&nbsp;V, then a "corrected" 1.385&nbsp;V at 1000&nbsp;RPM) both proved worse</td><td><span class="badge diff">different approach</span></td></tr>
+<tr><td>Internal-state saturation</td><td>Explicit clamps on <code>Ialfa_est</code>/<code>Ibeta_est</code> (±<code>INT16_MAX·hF1</code>) and <code>Bemf_alfa_est</code>/<code>Bemf_beta_est</code> (±<code>INT16_MAX·hF2</code>) every cycle, <em>on top of</em> the natural fixed-point range limit</td><td>Was missing entirely; now added explicitly using <code>p.MaxReadableCurrent_A</code> and <code>±1.2×p.PLL_BemfPeak_V</code></td><td><span class="badge diff">was missing, now added</span></td></tr>
+<tr><td>Convergence gate before handoff</td><td><code>STO_PLL_IsObserverConverged()</code>, checked continuously; handoff requires estimate within a tolerance band of the forced speed for several consecutive samples, with a fixed-time schedule only as a safety timeout</td><td>Handoff is purely time-scheduled (<code>p.Startup_T(end)</code>); no convergence check exists</td><td><span class="badge diff">missing here</span></td></tr>
+<tr><td>Minimum trusted speed</td><td><code>OBS_MINIMUM_SPEED_RPM = 2400</code> — observer output isn't trusted below this speed</td><td>No equivalent floor currently enforced</td><td><span class="badge diff">missing here</span></td></tr>
+</table>
+
+<h2 id="improve">8. How to improve performance further</h2>
+<p>In priority order, based on what the plots above actually show:</p>
+
+<h3>1. Retune so the Bemf estimate settles <em>below</em> the clamp, not against it</h3>
+<p>Fig. 8 is the clearest signal here: the estimate is pinned at the clamp continuously rather than occasionally. The clamp bound itself (7.48&nbsp;V &times; 1.2) is deliberately generous — the real issue is that <code>G2</code> (and/or the PLL's Kp/Ki, which set how fast <code>theta_est</code>/<code>we_est</code> can be pushed around by a given phase error) are still letting the correction loop overshoot much further than the true ~3.2&nbsp;V back-EMF at this speed. Two independent levers to try, ideally one at a time so their effects can be told apart:</p>
+<ul>
+<li>Recompute <code>p.STO_G2</code>'s pole-placement target eigenvalue slightly less aggressively (currently split evenly for critical damping and fastest convergence — a touch of extra margin trades a little speed of convergence for a lot of overshoot headroom).</li>
+<li>Re-examine <code>pll_wn</code> (currently 30&nbsp;Hz) together with <code>p.PLL_BemfPeak_V</code> as a pair — the code comments already document a real trade-off found while tuning this (100&nbsp;Hz picked up PWM/reconstruction ripple, 15&nbsp;Hz didn't converge inside the ramp window). Now that the clamp exists as a backstop, it may be worth re-visiting that trade-off since a runaway is no longer the risk it was.</li>
+</ul>
+
+<h3>2. Add ST's convergence gate instead of a fixed handoff schedule</h3>
+<p>ST's firmware never hands off on a timer alone — <code>STO_PLL_IsObserverConverged()</code> checks the estimate against the forced speed continuously, requiring several consecutive in-tolerance samples, with the fixed-time schedule kept only as a fallback timeout. This model currently hands off purely on the clock (<code>p.Startup_T(end)</code>), regardless of whether the observer has actually locked. Even with the clamp fix in place, this is worth adding as a second, independent layer of protection — implemented here as <code>check_convergence()</code> (comparing <code>we_est</code> to <code>we_target</code> within a tolerance, debounced over consecutive samples) feeding the angle-blend's trigger instead of a raw constant.</p>
+
+<h3>3. Consider ST's <code>OBS_MINIMUM_SPEED_RPM</code> equivalent</h3>
+<p>ST doesn't trust the observer's output at all below 2400&nbsp;RPM (mechanical) — below that, back-EMF is small enough that the estimate is unreliable regardless of tuning. Enforcing an equivalent floor here (don't consider convergence, don't hand off) until the forced ramp has reached a comparable minimum speed would remove one more way for a marginal, low-speed lock to be mistaken for a good one.</p>
+
+<h3>4. Re-examine the 16&nbsp;kHz vs. 12.5&nbsp;kHz difference</h3>
+<p>A slower control rate (80&nbsp;µs vs. 62.5&nbsp;µs here) means fewer corrections per electrical cycle at any given speed, and less margin before discretization effects start to matter. This wasn't the dominant cause of the original runaway (a stability-margin check showed the loop has roughly 400&times; oversampling relative to its intended 30&nbsp;Hz bandwidth, so discretization itself has plenty of headroom) — but it does mean any residual gain mismatch has a little less room to hide than it would at ST's actual rate. Worth keeping in mind if further tuning is needed and margin still feels tight.</p>
+
+<h3>5. Decouple the G1/G2 design from the alpha/beta rotation coupling more fully</h3>
+<p><code>p.STO_G2</code>'s pole-placement derivation currently designs the current-error dynamics as if alpha and beta were independent, single-axis loops — the code comments are explicit that the rotation coupling between them is deliberately set aside for gain <em>selection</em> only, even though the runtime equations keep the full coupling. That's a reasonable simplification, but a design that accounts for the coupling directly (treating Bemf_alpha/Bemf_beta as one complex/rotating state rather than two decoupled real ones) would likely produce a tighter, more accurate gain choice — especially relevant now that the goal is getting the estimate to converge <em>cleanly</em>, not just to stay bounded.</p>
+
+<div class="callout good">
+<span class="tag">Bottom line</span>
+The sensorless handoff works now — that's real progress, verified end-to-end in the plots above. The next round of improvement is about tightening the observer's own convergence (items 1 and 5) and adding the safety layers ST's real firmware already has (items 2 and 3), so the drive is robust by design rather than by a clamp catching what would otherwise be a runaway.
+</div>
+
+<h2 id="progress">9. Progress update — items 1–3 implemented</h2>
+<p>Since section 8 was written, items 1–3 have been built and tested end-to-end. The motor now completes the full open-loop ramp, hands off to sensorless closed-loop control, and holds speed without stalling. Here's what actually changed, and where it still diverges from ST on purpose or by simplification.</p>
+
+<h3>1. Bemf clamp — replaced with a dynamic, Ke-based bound</h3>
+<p>Retuning <code>p.STO_G2</code>'s pole-placement target alone ("Step 2a": a slower, less-evenly-split eigenvalue choice) gave essentially no change in steady-state Bemf magnitude bias — 5.66&nbsp;V vs. the 5.73&nbsp;V baseline, despite <code>G2</code> being 53% larger. Section 11 below explains why: with <code>G1</code> fixed, the two observer-error eigenvalues' <em>sum</em> is fixed, so <code>G2</code> can only redistribute between them, not change the observer's achievable bandwidth.</p>
+<p>What actually fixed the clamp-pinning problem was replacing the fixed <code>±1.2×p.PLL_BemfPeak_V</code> bound with a <strong>dynamic</strong> one that scales with the estimated speed itself:</p>
+<pre><code>Ke = 0.00439;  % V per rad/s electrical, from this motor's own measured back-EMF profile
+bemfClampBound = max(Ke * abs(we_est) * 2.5, bemfFloorV);  % bemfFloorV = 0.3 V</code></pre>
+<p><code>Ke</code> comes directly from <code>X5550backEMF_4000rpm.m</code>'s measured peak (≈5.513&nbsp;V at 4000&nbsp;RPM mechanical → <code>Ke = 5.513 / (4000·(2π/60)·3) ≈ 0.00439</code>). The 2.5× margin and the floor were both found the hard way: a 1.5× margin let the clamp clip the correction right at the handover transient (false lock, stall); and with no floor at all, the clamp collapses to exactly 0 whenever <code>we_est</code>'s initial condition is 0 — a permanent self-reinforcing deadlock, since zero Bemf clamp &rarr; zero phase error &rarr; <code>we_est</code> never corrected away from 0.</p>
+<div class="callout warn">
+<span class="tag">ST comparison</span>
+ST uses a <strong>static</strong> clamp — a fixed worst-case ceiling derived from <code>MAX_BEMF_VOLTAGE</code> (computed off <code>MAX_APPLICATION_SPEED_RPM</code>), not scaled with instantaneous speed. The dynamic version here is a deliberate departure: tighter and more physically accurate in principle, but it introduces a self-referential fragility ST's simpler version doesn't have (the clamp is built from the very signal, <code>we_est</code>, whose correctness it's supposed to help preserve) — hence needing the 2.5× margin as a practical safety factor.
+</div>
+
+<h3>2. Convergence-gated handoff — <code>handover_timing_gate</code></h3>
+<p>A new MATLAB Function block, <code>handover_timing_gate</code> (inside <code>Startup</code>), replaces <code>angle blend</code>'s fixed <code>T5</code> input with a computed <code>T5_eff</code>:</p>
+<pre><code>function [T5_eff, Count] = handover_timing_gate(we_est, we_target, t_elapsed, ...
+                                                 tolFrac, minRampTime, timeoutMargin, T5_fixed, minSpeed)
+persistent okCount tLatched
+if isempty(okCount)
+    okCount = 0; tLatched = -1;
+end
+DEBOUNCE_N = 20;  % consecutive in-tolerance samples required
+
+if t_elapsed >= minRampTime && abs(we_target) > 50 && abs(we_est) > minSpeed
+    speedErrPct = abs(we_est - we_target) / abs(we_target) * 100;
+    if speedErrPct < tolFrac*100, okCount = okCount + 1; else, okCount = 0; end
+else
+    okCount = 0;
+end
+Count = okCount;
+
+if tLatched < 0 && okCount >= DEBOUNCE_N
+    tLatched = t_elapsed;                        % genuine convergence, latched
+elseif tLatched < 0 && t_elapsed >= (T5_fixed + timeoutMargin)
+    tLatched = T5_fixed + timeoutMargin;          % timeout fallback, latched to a FIXED point
+end
+
+if tLatched >= 0
+    T5_eff = tLatched;
+else
+    T5_eff = 1e6;      % not yet -- keep angle blend's t_elapsed>=T5 false
+end</code></pre>
+<p>Two bugs surfaced and were fixed while building this:</p>
+<ul>
+<li><strong>Timeout branch chased a moving target.</strong> The first version set <code>T5_eff = t_elapsed</code> directly in the timeout branch — but since <code>angle blend</code> checks <code>t_elapsed >= T5</code>, and <code>T5</code> was being redefined to equal <code>t_elapsed</code> on every sample, the two values stayed permanently tied and the comparison never resolved. Fixed by latching to the fixed value <code>T5_fixed + timeoutMargin</code> instead — same pattern as the convergence latch.</li>
+<li><strong>Units mismatch on <code>minSpeed</code>.</strong> First tried as a raw RPM number (2300) compared directly against <code>we_est</code>, which is in rad/s electrical — 2300 rad/s corresponds to ~7300&nbsp;RPM mechanical, never reached, so the gate could never latch via genuine convergence. Fixed by feeding <code>p.MinStartUpValidSpeed</code> (already correctly computed in rad/s in <code>ss_params.m</code>) instead.</li>
+</ul>
+<div class="callout warn">
+<span class="tag">ST comparison — open decision</span>
+ST's <code>STO_PLL_IsObserverConverged</code> requires the estimate within a <strong>15%</strong> band for <strong>2</strong> consecutive samples, evaluated against ST's own buffered/averaged speed — and <code>p.ConvergenceBand_Frac = 0.15</code> / <code>p.ConvergenceConsecutiveSamples = 2</code> already exist in <code>ss_params.m</code> matching those exact ST constants, unused. <code>handover_timing_gate</code> currently uses its own harder <code>tolFrac = 0.05</code> (5%) / <code>DEBOUNCE_N = 20</code> instead. ST also gates its consistency counter behind a separate variance/"is this estimate even reliable" check before applying the tolerance band at all — this gate folds that into using the filtered speed estimate (section 9.3 below) directly, a simplification rather than an exact match. Worth a decision: align with the existing ST-matched constants, or keep the current (tighter, more conservative) values?
+</div>
+
+<h3>3. Filtered speed estimate + minimum-speed floor</h3>
+<p>Feeding the gate's comparison off the <strong>raw</strong> <code>we_est</code> turned out to be unreliable — the raw signal swings by ±50% or more around its true value within a single electrical cycle (see section 10), so a debounce counter built on it could latch on a lucky noise excursion rather than genuine settling. A 32-tap circular-buffer moving average (matching ST's own <code>STO_FIFO_DEPTH_DPP = 32</code> approach, <code>SPD_CalcAvrgMecSpeedUnit</code>) was added inside <code>State Observer+PLL</code>:</p>
+<pre><code>function we_avg = ss_speed_filter_step(we_est)
+persistent buf idx initialized
+N = 32;   % ~2.56 ms window at 12.5 kHz (ST: ~2 ms at 16 kHz)
+if isempty(initialized)
+    buf = zeros(1,N); idx = 1; initialized = true;
+end
+buf(idx) = we_est;
+idx = idx + 1; if idx > N, idx = 1; end
+we_avg = sum(buf)/N;</code></pre>
+<p>This filtered value now feeds both <code>handover_timing_gate</code>'s tolerance check and its minimum-speed floor (<code>p.MinStartUpValidSpeed</code>, from <code>OBS_MINIMUM_SPEED_RPM = 2300</code>) — the same role as ST's <code>MinStartUpValidSpeed</code> check in <code>STO_PLL_IsObserverConverged</code>. Note the 32-tap window (~2.56&nbsp;ms) is still shorter than one electrical revolution at these speeds (~8–9&nbsp;ms period), so it dampens but doesn't eliminate the once-per-cycle ripple described in section 10 — that's expected, not a sign the filter needs to be wider by itself (see section 11 for why a wider window trades directly against tracking lag).</p>
+
+<h2 id="bemfshape">10. Why the Bemf / <code>we_est</code> waveforms look like this</h2>
+<p>Once running, <code>bemf_alpha</code>/<code>bemf_beta</code> show a repeating, non-sinusoidal shape each electrical cycle — a flat-ish, faintly double-humped crest with sharp transitions, not a smooth sine peak — and <code>we_est</code> shows a matching periodic ripple synchronized with the same cycle. This is structural, not a tuning artifact, and it traces back to the plant itself:</p>
+<ul>
+<li>The plant block is <code>FOC_ctrl/BLDC Motor</code> — <code>MaskType: BLDC</code>, a trapezoidal-back-EMF machine model, not a sinusoidal PMSM model.</li>
+<li>The measured profile driving it (<code>X5550backEMF_4000rpm.m</code>) confirms this directly in the raw data: near the peak the samples read <code>…-5.334, -5.512, -5.513, -5.338…</code> — a flat plateau across two samples, not a single rounded crest.</li>
+</ul>
+<p>The observer's internal model, by contrast, is a pure rotation: <code>Bemf_alpha_est_next = Bemf_alpha_est + Ts·we_est·Bemf_beta_est + G2·Ialpha_err</code> can only trace a perfect circle on its own — it has no mechanism to generate harmonic content by itself. The only way <code>Bemf_alpha_est</code>/<code>Bemf_beta_est</code> end up flat-topped and double-humped is that the correction term <code>G2·Ialpha_err</code> — driven by the real measured current, which reflects the real trapezoidal back-EMF — repeatedly pulls the estimate away from its natural circular path to match reality. That's the observer faithfully tracking a non-sinusoidal source with a sinusoidal model, via continuous correction — a sign <code>G1</code>/<code>G2</code> are doing their job, not a malfunction.</p>
+<p>The same mismatch then propagates into <code>we_est</code>: the phase detector, <code>phaseErr = -(Bemf_alpha_est·sinθ + Bemf_beta_est·cosθ)</code>, assumes <code>Bemf_alpha</code>/<code>Bemf_beta</code> trace a clean sinusoid synchronized with θ. When the real signal has harmonic content, <code>phaseErr</code> picks up a spurious component that isn't really "the angle estimate is wrong" — it's "the sinusoidal yardstick doesn't fit this non-sinusoidal signal." That spurious component feeds straight through the PI loop into <code>we_est</code>, appearing as a deterministic, per-cycle ripple rather than random noise.</p>
+<div class="callout warn">
+<span class="tag">ST comparison</span>
+ST's STO-PLL algorithm is designed for sinusoidal-back-EMF PMSMs. If ST's own firmware were run against a genuinely trapezoidal BLDC machine, it would hit this same mismatch — this isn't something this port did wrong relative to ST, it's a fundamental limitation of applying this class of algorithm to this class of motor. Worth checking against the real target hardware: is the actual motor this trapezoidal, or is the Simscape BLDC block / measured profile more aggressive than the real motor's true back-EMF shape? If the real motor is closer to sinusoidal, the ripple seen here in simulation may be overstated relative to reality.
+</div>
+<p>Practically: a meaningful part of "<code>we_est</code> is noisy" — chased throughout this whole investigation via clamp width, G2 retuning, and the convergence gate — is this structural effect, not a tunable artifact. The moving-average filter (section 9.3) and the margins already built in are the right response (tolerate it, size the system to be robust to it) rather than something to keep chasing away with gain changes.</p>
+
+<h2 id="gains">11. Observer (G1/G2) and PLL (Kp/Ki) gains, explained</h2>
+<p>Current values, from <code>ss_params.m</code> at this motor's <code>Rs=0.30&nbsp;Ω</code>, <code>Ls=160&nbsp;µH</code>, <code>Ts=80&nbsp;µs</code>:</p>
+<table>
+<tr><th>Gain</th><th>Value</th><th>Role</th><th>Origin</th></tr>
+<tr><td><code>p.STO_G1</code></td><td>&minus;1.4786</td><td>Current-error correction (Stage&nbsp;1)</td><td><span class="badge same">exact ST port</span> (<code>GAIN1/F1</code>)</td></tr>
+<tr><td><code>p.STO_G2</code></td><td>1.326&nbsp;V/A</td><td>Back-EMF-error correction (Stage&nbsp;1)</td><td><span class="badge reason">pole-placed</span>, given <code>G1</code></td></tr>
+<tr><td><code>p.PLL_Kp</code></td><td>35.62&nbsp;rad/s per V</td><td>PLL loop-filter proportional term (Stage&nbsp;2)</td><td><span class="badge reason">2nd-order design</span> (&zeta;/&omega;n)</td></tr>
+<tr><td><code>p.PLL_Ki</code></td><td>0.380&nbsp;rad/s per V per sample</td><td>PLL loop-filter integral term (Stage&nbsp;2)</td><td><span class="badge reason">2nd-order design</span> (&zeta;/&omega;n)</td></tr>
+</table>
+
+<h3>G1 and G2 — how they're derived, and why G2 alone has limited reach</h3>
+<p><code>G1</code> multiplies the current-prediction error (<code>Ialpha_err = Ialpha_est - Ialpha_meas</code>) in the current-state update — it's an exact, unmodified port of ST's <code>GAIN1/F1</code>. <code>G2</code> multiplies that <em>same</em> current error, but feeds the back-EMF-state update instead — it was re-designed (not ported) because ST's <code>GAIN2</code> lives inside ST's own ADC-digit/voltage-digit fixed-point scaling chain, which doesn't unwind cleanly into this build's SI-unit, floating-point form.</p>
+<p>The re-design is a textbook discrete pole-placement on the coupled (current-error, Bemf-error) dynamics:</p>
+<pre><code>a_ei = 1 - Ts*Rs/Ls + G1        % = -0.6286, with G1 fixed
+b_ei = -Ts/Ls                   % = -0.5
+targetEig = (a_ei + 1) / 2      % = 0.1857 -- see below for why "+1" and "/2"
+G2 = (a_ei - targetEig^2) / b_ei   % = 1.326 V/A</code></pre>
+<p>Written as a 2×2 system, <code>[Ialpha_err; Bemf_err]</code> advances by the matrix <code>[[a_ei, b_ei], [G2, 1]]</code>. Its trace — <code>a_ei + 1</code> — is the <em>sum</em> of the two closed-loop eigenvalues, and that sum doesn't depend on <code>G2</code> at all (it's a diagonal property). <code>G2</code> only controls the <em>product</em> of the two eigenvalues, i.e. how that fixed sum gets split between them. Choosing <code>targetEig = (a_ei+1)/2</code> places both eigenvalues at the same point — the critically-damped choice, and the fastest non-oscillatory response achievable for this (<code>G1</code>-fixed) sum.</p>
+<div class="callout bad">
+<span class="tag">Why Step 2a (re-tuning G2 alone) didn't help</span>
+Because the eigenvalue <em>sum</em> is fixed once <code>G1</code> is chosen, picking a different <code>targetEig</code> (as Step 2a did — a slower, less-evenly-split choice) doesn't make the observer's response uniformly slower or quieter. It makes <em>one</em> eigenvalue faster and the <em>other</em> slower, trading one for the other within the same fixed budget — consistent with the empirical result (virtually unchanged Bemf magnitude bias despite a 53% larger <code>G2</code>). <strong>If less noise or a different observer bandwidth is the actual goal, <code>G1</code> is the lever that matters</strong> — it sets the fixed sum in the first place — not <code>G2</code>. <code>G1</code> is currently a verbatim ST port, never independently re-optimized for this motor's <code>Rs</code>/<code>Ls</code>/<code>Ts</code>. A smaller-magnitude <code>G1</code> (less aggressive current correction) would lean more on the observer's own internal model and less on noisy real-time current-error correction — smoother but slower/more lagged; a larger-magnitude <code>G1</code> does the opposite. This hasn't been tried — flagged here as the real tuning opportunity for "less noisy Bemf/current estimate," rather than continuing to adjust <code>G2</code>.
+</div>
+
+<h3>PLL Kp/Ki — classical second-order design</h3>
+<p>The phase detector behaves as <code>error ≈ |Bemf|·sin(θ_true − θ_est)</code> — a proportional-to-sin detector with gain <code>|Bemf|</code> [V/rad], exactly like a classical multiplying-PD PLL. Treating the loop filter (PI) and the plant (a pure integrator from <code>we_est</code> to <code>theta_est</code>) as a standard second-order servo, matched to <code>s² + 2&zeta;&omega;n·s + &omega;n²</code>:</p>
+<pre><code>Kp = 2*zeta*wn / Kd        % Kd = p.PLL_BemfPeak_V, the phase-detector gain
+Ki = (wn^2 / Kd) * Ts</code></pre>
+<p>with <code>&zeta; = 0.707</code> (the standard "maximally flat," minimal-overshoot choice — rarely worth changing) and <code>&omega;n = 2&pi;&times;30&nbsp;rad/s</code> (the actual tunable knob). <code>&omega;n</code> is a direct noise/speed trade-off: higher &rarr; faster tracking but more sensitive to the per-cycle ripple from section 10; lower &rarr; smoother <code>we_est</code> but slower to track genuine speed changes. The existing code comments record real tuning history on this exact trade-off: 100&nbsp;Hz picked up PWM/reconstruction ripple, 15&nbsp;Hz didn't converge inside the old fixed-time ramp window, 30&nbsp;Hz was the compromise.</p>
+<div class="callout good">
+<span class="tag">Worth revisiting now</span>
+The 15&nbsp;Hz rejection was specifically because it "didn't converge within the firmware's own T1–T5 align/ramp timing" — but that was before the convergence gate (section 9.2) existed. With a timeout margin now tolerating a late handoff instead of forcing a hard deadline, a lower <code>pll_wn</code> (back toward 15–20&nbsp;Hz) may be worth trying again purely for noise rejection — the original objection to it may no longer apply.
+</div>
+<div class="callout warn">
+<span class="tag">ST comparison</span>
+ST's own <code>PLL_KP_GAIN=449</code>/<code>PLL_KI_GAIN=20</code> (with <code>KPDIV=16384</code>/<code>KIDIV=65535</code>) are fixed integers operating on ST's internal Q15 "Bemf-digit" scale, producing output directly in "Dpp" units — that scaling chain doesn't unwind cleanly into SI rad/s and volts the way <code>G1</code> did, so these gains were independently re-derived via the &zeta;/&omega;n design above rather than reverse-engineered bit-for-bit. Same reasoning, same caveat as <code>G2</code>.
+</div>
+
+</div>
+</body>
+</html>

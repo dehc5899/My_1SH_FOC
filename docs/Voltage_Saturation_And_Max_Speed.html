@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Modulation Index, Voltage Saturation, and Why This Motor Stalls Near 3100 RPM</title>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#1c2331; --sub:#4b5568; --accent:#1f6feb; --accent2:#b5321f;
+    --panel:#f6f8fb; --border:#dbe2ec; --code:#eef1f6; --good:#1a7f37; --warn:#9a6700; --bad:#b5321f;
+  }
+  html,body{background:var(--bg); color:var(--ink); font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif; line-height:1.55; margin:0;}
+  .wrap{max-width:980px; margin:0 auto; padding:36px 24px 80px;}
+  h1{font-size:2.0rem; margin-bottom:.2em;}
+  h1 + p.subtitle{color:var(--sub); font-size:1.05rem; margin-top:0;}
+  h2{font-size:1.4rem; margin-top:2.6em; padding-top:.3em; border-top:1px solid var(--border);}
+  h3{font-size:1.12rem; margin-top:1.8em; color:var(--ink);}
+  p{margin:.9em 0;}
+  .callout{background:var(--panel); border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:6px; padding:14px 18px; margin:1.2em 0;}
+  .callout.good{border-left-color:var(--good);}
+  .callout.warn{border-left-color:var(--warn);}
+  .callout.bad{border-left-color:var(--bad);}
+  .callout .tag{font-weight:700; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; color:var(--sub); display:block; margin-bottom:.3em;}
+  figure{margin:1.6em 0; text-align:center;}
+  figure img{max-width:100%; border:1px solid var(--border); border-radius:6px; background:#fff;}
+  figure svg{max-width:100%; height:auto; background:#fff; border:1px solid var(--border); border-radius:6px;}
+  figcaption{color:var(--sub); font-size:.88rem; margin-top:.5em;}
+  code, .mono{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace; font-size:.92em; background:var(--code); padding:.12em .38em; border-radius:4px;}
+  pre{background:var(--code); border:1px solid var(--border); border-radius:6px; padding:14px 16px; overflow-x:auto; font-size:.86rem;}
+  pre code{background:none; padding:0;}
+  table{width:100%; border-collapse:collapse; margin:1.2em 0; font-size:.92rem;}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top;}
+  th{background:var(--panel); font-size:.82rem; text-transform:uppercase; letter-spacing:.03em; color:var(--sub);}
+  tr:hover td{background:#fafbfd;}
+  ul, ol{padding-left:1.4em;}
+  li{margin:.4em 0;}
+  .toc{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:18px 22px;}
+  .toc a{color:var(--accent); text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  .toc ol{margin:.3em 0;}
+  .kicker{font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">My_1SH_FOC — internal reference</p>
+<h1>Modulation Index, Voltage Saturation, and Why This Motor Stalls Near 3100 RPM</h1>
+<p class="subtitle">What modulation index actually is, why every motor drive has a voltage ceiling that rises with speed, where this model pins against it, how the sensorless angle error was measured, and what to do about it.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#what-happened">What happened, in this simulation</a></li>
+<li><a href="#basics">Modulation index, from basics</a></li>
+<li><a href="#this-model">Where this shows up in this project's own numbers</a></li>
+<li><a href="#why-speed">Why the ceiling gets closer as speed rises</a></li>
+<li><a href="#diagnosis">What the logged signals actually show</a></li>
+<li><a href="#methodology">How the angle error was measured</a></li>
+<li><a href="#why-angle">Why angle error grows worse right at saturation</a></li>
+<li><a href="#strategy">How to reduce it / what to do next</a></li>
+<li><a href="#torque-cost">What the ~25° angle error costs in torque/current terms</a></li>
+</ol>
+</div>
+
+<h2 id="what-happened">1. What happened, in this simulation</h2>
+<p>With the speed loop correctly closed on the sensorless estimate (<code>we_est_mech</code>, filtered, not the real sensor) and a plain constant 0.11&nbsp;Nm load — no compressor involved — the motor accelerates smoothly from the sensorless handoff up to about <strong>3089&nbsp;RPM</strong>, then collapses to a stall within about 40&nbsp;ms.</p>
+<figure>
+<img src="voltage_saturation_doc_assets/fig_v_rpm.png" alt="RPM climbing smoothly to about 3090 then collapsing sharply">
+<figcaption>Fig. 1 — Real motor speed. Smooth, continuous acceleration right up to the moment of collapse — this isn't a slow drift into instability, something changes abruptly around t≈1.58s.</figcaption>
+</figure>
+<p>This motor's own rated maximum, per <code>motorParameters.m</code> (<code>Option.Product==4</code>, this BDnanoEV configuration): <code>BDnano.Motor.nMax_MaximalSpeedrpm = 3000</code>. The stall happens almost exactly at this motor's documented ceiling — not an arbitrary control failure, but the system running into a real limit.</p>
+
+<h2 id="basics">2. Modulation index, from basics</h2>
+<p>A three-phase inverter builds up an AC voltage waveform for the motor by rapidly switching a fixed DC bus voltage on and off (PWM). The <em>average</em> voltage over one switching cycle is controlled by how long the switch stays on — the duty cycle. <strong>Modulation index</strong> is simply a normalized measure of how much of the available DC bus voltage is being asked for, as a fraction of the maximum the inverter can deliver as a clean sine wave:</p>
+<pre><code>modulation index = (commanded phase voltage amplitude) / (maximum achievable phase voltage amplitude)</code></pre>
+<p>At index 0, the inverter outputs nothing. At index 1 (100%), it's already asking for the largest <em>sinusoidal</em> voltage the bus can produce. Push further and the commanded waveform can no longer be reproduced faithfully — welcome to <strong>overmodulation</strong>, where the output distorts (flattens at the top, gains harmonics) because the inverter is being asked for more voltage than a clean sine wave at this bus voltage can supply.</p>
+
+<figure>
+<svg viewBox="0 0 700 380" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .lbl3{font:12px -apple-system,sans-serif; fill:#4b5568;}
+  .ttl3{font:13px -apple-system,sans-serif; fill:#1c2331; font-weight:700;}
+</style>
+<text x="20" y="24" class="ttl3">The voltage-vector limit: hexagon vs. circles</text>
+
+<!-- hexagon: six inverter voltage vectors -->
+<polygon points="350,80 437,130 437,230 350,280 263,230 263,130" fill="none" stroke="#4b5568" stroke-width="2"/>
+<text x="440" y="130" class="lbl3">V2</text>
+<text x="440" y="235" class="lbl3">V3</text>
+<text x="352" y="300" class="lbl3">V4</text>
+<text x="230" y="235" class="lbl3">V5</text>
+<text x="230" y="130" class="lbl3">V6</text>
+<text x="352" y="70" class="lbl3">V1</text>
+
+<!-- inscribed circle: linear modulation region -->
+<circle cx="350" cy="180" r="75" fill="none" stroke="#1f6feb" stroke-width="2"/>
+<text x="350" y="183" text-anchor="middle" class="lbl3" fill="#1f6feb">linear region</text>
+<text x="350" y="197" text-anchor="middle" class="lbl3" fill="#1f6feb">(modulation index ≤ 1.0)</text>
+
+<!-- outer circle touching hexagon vertices: six-step limit -->
+<circle cx="350" cy="180" r="100" fill="none" stroke="#b5321f" stroke-width="1.5" stroke-dasharray="5,4"/>
+<text x="350" y="92" text-anchor="middle" class="lbl3" fill="#b5321f">hexagon vertices</text>
+<text x="350" y="106" text-anchor="middle" class="lbl3" fill="#b5321f">(six-step, index ≈ 1.1547)</text>
+
+<text x="60" y="340" class="lbl3">Between the two circles ("overmodulation"): the commanded voltage vector</text>
+<text x="60" y="356" class="lbl3">can't be reproduced without distortion — the inverter clips toward the hexagon edge.</text>
+</svg>
+<figcaption>Fig. 2 — The classic space-vector picture. The inverter can only ever produce a voltage vector inside the hexagon formed by its six switching states. A perfectly circular (undistorted sinusoidal) output is only possible up to the inscribed circle — that's modulation index 1.0. Space-vector PWM can stretch a bit further, to the hexagon's own vertices (index ≈1.1547 = 2/√3), at the cost of a less sinusoidal waveform. Beyond that, there is no more voltage to give, from this bus, full stop.</figcaption>
+</figure>
+
+<h2 id="this-model">3. Where this shows up in this project's own numbers</h2>
+<p>This project already has two named voltage scales in <code>ss_params.m</code>, exactly tracking the two circles in Fig. 2:</p>
+<table>
+<tr><th>Name</th><th>Value</th><th>Meaning</th></tr>
+<tr><td><code>p.VphasePerUnit</code></td><td><code>Vbus/2</code> = 6.000&nbsp;V</td><td>Volts per 1.0 of <code>Valpha</code>/<code>Vbeta</code> entering the SVPWM stage — confirmed by this project's own measured voltage-ceiling speed (4260&nbsp;RPM), not the theoretical value.</td></tr>
+<tr><td><code>p.VphaseMaxLinear</code></td><td><code>Vbus/√3</code> = 6.928&nbsp;V</td><td>The textbook SVPWM linear-modulation ceiling (the inscribed circle, scaled) — a theoretical bound, not necessarily what this inverter actually achieves.</td></tr>
+</table>
+<p>The diagnostic logging computed <code>|V| = sqrt(Valpha² + Vbeta²)</code> directly from this project's own <code>Valpha</code>/<code>Vbeta</code> Goto-tagged signals (already in this per-unit convention, where 1.0 = <code>VphasePerUnit</code>), and divided by that same per-unit base — i.e. exactly the modulation-index definition above, using this project's own established scale factors, not an assumed textbook one.</p>
+<figure>
+<img src="voltage_saturation_doc_assets/fig_v_modindex.png" alt="Modulation index pinned near 0.95-1.0, briefly exceeding it">
+<figcaption>Fig. 3 — <code>|V|/V_phasePerUnit</code> through the collapse. It sits at <strong>0.95</strong> for several consecutive samples right before the peak RPM, and briefly reaches <strong>1.32</strong> over the full run — solidly into overmodulation, well past the "is there any more voltage to give" line.</figcaption>
+</figure>
+
+<h2 id="why-speed">4. Why the ceiling gets closer as speed rises</h2>
+<p>The voltage the inverter must supply at any instant has to cover three things: the resistive drop (<code>I·R</code>), the inductive drop (<code>L·dI/dt</code>), and — the dominant one at any meaningful speed — the back-EMF the spinning rotor itself generates (<code>E = Ke·ω</code>). Back-EMF grows <em>linearly with speed</em>, while the bus voltage is fixed. So as speed rises, an ever-larger share of the same fixed voltage budget goes just to "keeping up with" the motor's own back-EMF, leaving less and less margin for the <code>I·R</code> and <code>L·dI/dt</code> terms that actually push current — and therefore torque — through the windings.</p>
+<figure>
+<svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .lbl4{font:12px -apple-system,sans-serif; fill:#4b5568;}
+  .ttl4{font:13px -apple-system,sans-serif; fill:#1c2331; font-weight:700;}
+</style>
+<text x="20" y="22" class="ttl4">Low speed: plenty of headroom</text>
+<rect x="40" y="50" width="200" height="30" fill="#1f6feb" opacity="0.25" stroke="#1f6feb"/>
+<text x="140" y="70" text-anchor="middle" class="lbl4">back-EMF (small)</text>
+<rect x="240" y="50" width="60" height="30" fill="#9a6700" opacity="0.35" stroke="#9a6700"/>
+<text x="270" y="70" text-anchor="middle" class="lbl4" font-size="10">I·R + L·dI/dt</text>
+<rect x="40" y="90" width="300" height="2" fill="#1c2331"/>
+<text x="345" y="95" class="lbl4">← available bus voltage →</text>
+
+<text x="20" y="150" class="ttl4">Near rated speed: almost nothing left</text>
+<rect x="40" y="178" width="280" height="30" fill="#1f6feb" opacity="0.25" stroke="#1f6feb"/>
+<text x="180" y="198" text-anchor="middle" class="lbl4">back-EMF (large, ∝ speed)</text>
+<rect x="320" y="178" width="20" height="30" fill="#9a6700" opacity="0.35" stroke="#9a6700"/>
+<rect x="40" y="218" width="300" height="2" fill="#1c2331"/>
+<text x="345" y="223" class="lbl4">← same fixed bus voltage →</text>
+</svg>
+<figcaption>Fig. 4 — The voltage budget is fixed (set by the 12&nbsp;V bus); back-EMF's share of it grows with speed and eats into what's left for driving current. Near this motor's rated speed, there's almost no margin left — exactly what Fig. 3 shows happening in real numbers.</figcaption>
+</figure>
+<p>This is exactly why <code>nMax_MaximalSpeedrpm = 3000</code> exists as a rating in the first place — it's the speed at which this motor's <code>Ke</code>, on this 12&nbsp;V bus, consumes essentially all the available voltage.</p>
+
+<h2 id="diagnosis">5. What the logged signals actually show</h2>
+<figure>
+<img src="voltage_saturation_doc_assets/fig_v_iq.png" alt="Iq current spiking past the 15A limit during the collapse">
+<figcaption>Fig. 5 — <code>Iq</code> stays within its 15&nbsp;A limit while voltage is merely <em>near</em> saturation, then spikes past it (peak 19.2&nbsp;A) once the cascade is already underway — current saturation here is a <em>consequence</em> of the voltage problem, not the trigger (contrast with the compressor-load stall, where current saturation was the primary, standalone cause).</figcaption>
+</figure>
+
+<h2 id="methodology">6. How the angle error was measured</h2>
+<p>This model, for validation only, carries the real Simscape rotor angle (<code>theta_ele</code>, from the plant's own rotational sensor) alongside the sensorless estimate the controller actually uses (<code>theta_est_next</code>, the PLL's output). Neither is normally visible to a true sensorless product — this project keeps <code>theta_ele</code> around specifically so claims like "the estimate is off by X degrees" can be checked against ground truth rather than guessed at.</p>
+<p>The method, concretely: both signals were logged via temporary <code>To Workspace</code> taps on their existing Goto-tagged signals (<code>theta_ele</code>, <code>theta_est_next</code>), at the same simulation timestamps. The raw difference between two wrapped angles (both live in [0, 2π)) isn't meaningful on its own — e.g. 359° and 1° are 2° apart, not 358° — so the error is wrapped back into a signed ±180° range:</p>
+<pre><code>angErr_deg = mod((theta_ele - theta_est_next)*180/pi + 180, 360) - 180;</code></pre>
+<p>This is the same wrap-aware technique used everywhere else in this project's own diagnostics (e.g. <code>diffwrap</code> for speed-from-angle). Plotting <code>angErr_deg</code> against time is what showed the error sitting at <strong>-18° to -33°</strong> for several samples before the collapse, then swinging past ±150° once lock is lost:</p>
+<figure>
+<img src="voltage_saturation_doc_assets/fig_v_angerr.png" alt="Angle error sitting around -20 to -33 degrees before the collapse, then swinging wildly">
+<figcaption>Fig. 6 — Angle error (true − estimated), wrap-corrected. Already meaningfully large and <em>worsening</em> while speed is still climbing smoothly — this is the tell that something is degrading before the visible collapse, not only during it.</figcaption>
+</figure>
+
+<h2 id="why-angle">7. Why angle error grows worse right at saturation</h2>
+<p>The observer's own current-prediction equation (<code>ss_sto_observer_step.m</code>) is built on an assumption: that <code>Valpha</code>/<code>Vbeta</code>, the voltage it's told was applied, is the voltage that <em>actually</em> reached the motor.</p>
+<pre><code>Ialpha_est_next = Ialpha_est + (Ts/Ls)*(Valpha_v - Rs*Ialpha_est - Bemf_alpha_est) + G1*Ialpha_err</code></pre>
+<p>Under normal (unsaturated) operation, that assumption holds — the PWM faithfully reproduces whatever <code>Valpha</code>/<code>Vbeta</code> was commanded, on average. Once modulation index pins at or above 1.0, it stops holding: the inverter physically cannot deliver more voltage than the bus allows, so the <em>actual</em> applied voltage clips below what the controller thinks it commanded. The observer's internal model is now being fed a wrong input exactly when it's least equipped to tolerate it — its own Bemf/current estimate, and therefore the angle derived from it, drifts away from reality specifically <em>because</em> of the saturation, not merely alongside it. That's the mechanism behind Fig. 6's error already climbing before the dramatic part of the collapse: voltage saturation and angle-tracking error feed each other once the margin runs out.</p>
+
+<div class="callout bad">
+<span class="tag">The core finding</span>
+This is not a gain-tuning problem and not something more filtering fixes. It is a hard physical ceiling (12&nbsp;V bus, this motor's <code>Ke</code>) landing almost exactly on this motor's own rated 3000&nbsp;RPM — and the failure mode when the system is pushed past it is an uncontrolled stall, not a graceful limit.
+</div>
+
+<h2 id="strategy">8. How to reduce it / what to do next</h2>
+<h3>1. Respect the rating — don't let the reference exceed it</h3>
+<p>The simplest, lowest-risk fix: cap the speed reference meaningfully below <code>nMax_MaximalSpeedrpm</code> (with margin — the collapse started before literally hitting 3000, so the safe ceiling is probably closer to 2700-2800 than 3000 outright), the same way a real product's firmware would never ask the motor for more than its rated speed in the first place.</p>
+<h3>2. Detect approaching saturation and back off before it bites</h3>
+<p>Rather than (or in addition to) a fixed cap, monitor the modulation index (<code>|V|/V_phasePerUnit</code>, exactly as computed here) and apply a protective limit — e.g. clamp the speed-loop's output or reduce the reference — once it crosses a threshold like 0.9, well before the hard saturation and the angle-tracking degradation that follows it. This is more robust than a fixed RPM cap because it reacts to the real physical constraint (voltage, which varies with load and bus-voltage sag) rather than an assumed speed number.</p>
+<h3>3. Field weakening — only if operation above base speed is actually required</h3>
+<p>If the real application genuinely needs speeds at or above this motor's natural (<code>Id=0</code>) ceiling, the standard technique is field weakening — deliberately injecting a negative <code>Id</code> to partially cancel the rotor's flux and reduce the back-EMF the inverter has to fight. This is a substantial control-architecture addition (a field-weakening controller managing the <code>Id</code> reference based on available voltage headroom), not a quick tuning change, and is only worth pursuing if the target application's speed requirement actually exceeds this motor's rated 3000&nbsp;RPM — worth confirming that's really needed before investing in it.</p>
+
+<div class="callout good">
+<span class="tag">Suggested next step</span>
+Before anything more involved: simply cap the speed reference below where saturation bites (item 1) and re-run the constant-load test to confirm the motor holds a stable, sustained speed with real margin — that establishes a clean, reliable operating envelope before any further work (including returning to the compressor load, which will also need to respect this same ceiling).
+</div>
+
+<h2 id="torque-cost">9. What the ~25° angle error costs in torque/current terms</h2>
+<p>Section 6/7 measured the sensorless angle error sitting at <strong>-18° to -33°</strong> (the estimate leading the real angle by roughly 25° on average) even during otherwise-stable running, well before any voltage saturation. The question that matters practically: is this a problem worth fixing, or something the system can tolerate?</p>
+
+<h3>The mechanism: a commutation error is a wasted-current problem, not just a "wrong number"</h3>
+<p>With <code>Id=0</code> control, the stator current vector is meant to sit exactly 90° from the rotor's <em>true</em> flux axis — that's the torque-maximizing position for a surface-PM/BLDC machine. Commutating on an angle that's off by φ doesn't just mis-report the angle, it physically rotates the applied current vector away from that optimal position by φ:</p>
+<figure>
+<svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .lbl5{font:12px -apple-system,sans-serif; fill:#4b5568;}
+  .ttl5{font:13px -apple-system,sans-serif; fill:#1c2331; font-weight:700;}
+  .ax5{stroke:#8a94a6; stroke-width:1.3; marker-end:url(#ah5);}
+</style>
+<defs><marker id="ah5" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#8a94a6"/></marker></defs>
+<text x="20" y="22" class="ttl5">True d-q frame vs. estimated d-q frame</text>
+
+<!-- true frame -->
+<line x1="320" y1="300" x2="320" y2="60" class="ax5"/>
+<text x="328" y="65" class="lbl5">true q-axis (rotor flux ⟂)</text>
+<line x1="320" y1="300" x2="520" y2="300" class="ax5"/>
+<text x="525" y="304" class="lbl5">true d-axis (rotor flux)</text>
+
+<!-- estimated frame, rotated by phi -->
+<line x1="320" y1="300" x2="205" y2="92" stroke="#1f6feb" stroke-width="1.6" marker-end="url(#ah5)"/>
+<text x="150" y="80" class="lbl5" fill="#1f6feb">estimated q-axis</text>
+<text x="150" y="94" class="lbl5" fill="#1f6feb">(what the controller thinks is 90°)</text>
+
+<!-- current vector commanded along estimated q-axis -->
+<line x1="320" y1="300" x2="233" y2="128" stroke="#b5321f" stroke-width="2.4" marker-end="url(#ah5)"/>
+<text x="150" y="150" class="lbl5" fill="#b5321f" font-weight="700">commanded I (along estimated q-axis)</text>
+
+<!-- decomposition onto true axes -->
+<line x1="233" y1="128" x2="320" y2="128" stroke="#9a6700" stroke-width="1.3" stroke-dasharray="4,3"/>
+<line x1="320" y1="128" x2="320" y2="300" stroke="#9a6700" stroke-width="1.3" stroke-dasharray="4,3"/>
+<text x="330" y="125" class="lbl5" fill="#9a6700">true Iq = I·cos(φ)</text>
+<text x="235" y="148" class="lbl5" fill="#9a6700">true Id = I·sin(φ) (wasted)</text>
+
+<!-- angle arc -->
+<path d="M 320 270 A 30 30 0 0 1 300 251" fill="none" stroke="#1c2331" stroke-width="1.3"/>
+<text x="330" y="255" class="lbl5">φ ≈ 25°</text>
+
+<text x="30" y="345" class="lbl5">The controller thinks it's pushing pure Iq. In the TRUE frame, that current vector has</text>
+<text x="30" y="361" class="lbl5">rotated by φ — part of it (true Iq) still makes torque; part (true Id) doesn't, for a surface-PM machine.</text>
+</svg>
+<figcaption>Fig. 7 — A commutation error of φ splits the commanded current between a torque-producing component (reduced by cos φ) and a wasted component (sin φ) that only adds copper loss.</figcaption>
+</figure>
+
+<h3>The numbers, at φ ≈ 25°</h3>
+<pre><code>Iq_true = I × cos(25°) = 0.906 × I     -> ~9.4% less torque per amp of current
+Id_true = I × sin(25°) = 0.423 × I     -> wasted current: I²R loss, zero torque contribution</code></pre>
+<p>So for the same commanded current magnitude, roughly <strong>9-10% less torque comes out</strong>, and a meaningful chunk of current (42% of the commanded magnitude) is doing nothing but heating the windings. Referencing Fig. 6's own data: this is a steady, structural characteristic of this implementation, not something unique to the near-saturation regime — it shows up during otherwise-normal running too.</p>
+
+<h3>Why this matters for the compressor work specifically</h3>
+<p>This directly compounds the problem documented in <code>Compressor_Load_Strategy.html</code>: that stall was caused by current saturation (22.6&nbsp;A demanded vs. a 15&nbsp;A limit) at the compression peak. A ~10% torque-per-amp penalty from commutation error means the system needs <em>even more</em> current than an ideally-aligned drive would to meet the same torque demand — tightening a margin that was already the root cause of the stall.</p>
+
+<h3>Is it stability-threatening on its own? No — and it doesn't block the feed-forward work</h3>
+<p>A synchronous machine only truly loses sync as the commutation error approaches ±90° (zero net torque-producing current); 25° has substantial margin before that regime, and this system has been observed running stably at lower speeds with errors in this same range. There's also no proven quick fix available yet — retuning <code>G1</code> and lowering the PLL bandwidth were both tried (see <code>Observer_PLL_Explained.html</code>) and neither helped; the underlying cause is the structural non-sinusoidal back-EMF mismatch (section 10 of that document), not a simple gain to adjust.</p>
+<p>The feed-forward's own angle lookup is comparatively more tolerant of this same error: since it's indexed by the <em>mechanical</em> crank angle (integrated from <code>we_est_mech</code>, already in mechanical rad/s), a steady 25° electrical offset maps to roughly <code>25°/pole_pairs ≈ 8°</code> of mechanical mistiming — a modest ~2% smear on a 360° profile, not a dealbreaker.</p>
+<div class="callout good">
+<span class="tag">Conclusion</span>
+Don't block the compressor feed-forward work on fixing this angle error — there's no quick fix in hand, and waiting risks stalling progress on a problem that does have a path forward. Proceed with feed-forward now, but budget roughly 10% extra current margin to cover this known, quantified loss, and treat angle-error reduction as a parallel improvement track to revisit afterward.
+</div>
+
+</div>
+</body>
+</html>

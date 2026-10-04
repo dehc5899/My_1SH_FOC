@@ -126,14 +126,16 @@ elseif Option.Product == 4
     BDnano.Motor.LOAD_DIRECTION               =          1;
 
     BDnano.Motor.J_Inertia                    =  1.512e-05;% old was1.761e-05,New 1.512e-05, we think its little less
-    BDnano.Motor.Ls                           =  160e-6;% 
-    BDnano.Motor.Lm                           =  35e-6; % 
-    BDnano.Motor.Ms                           =  64e-6; %
+    BDnano.Motor.Ls                           =  160e-6;% (Stator per-phase self-inductance): The average self-inductance of each individual stator phase winding
+    BDnano.Motor.Lm                           =  35e-6; % (Stator inductance fluctuation): The amplitude of the fluctuation in both the self and mutual inductance caused by rotor
+    BDnano.Motor.Ms                           =  64e-6; % (Stator mutual inductance): The average mutual inductance between any two stator phase winding
 
+    % L𝑑=𝐿𝑠+𝑀𝑠+3/2𝐿m (d-axis inductance)=276.5e-6
+    % Lq=𝐿𝑠+𝑀𝑠-3/2𝐿m (q-axis inductance)=171.5e-6
     BDnano.Motor.Ld                           =43.5e-6;   % received Ld frm a colleague
     BDnano.Motor.Lq                           =148.5e-6;  % received Lq frm a colleague
-    BDnano.Motor.Kt                           =0.021;     %torque constant of 0.021 N/A
-    BDnano.Motor.Ke                           =0.04954;     %K_e =0.014954  V/(rad/s)
+    BDnano.Motor.Kt                           =0.021;     % torque constant of 0.021 N/Apeak or 0.0298 Nm/Arms
+    BDnano.Motor.Ke                           =0.04954;     %K_e =0.014954  V/(rad/s),  datasheet=0.022 V/(rad/s) or 2.82 Vrms/Krpm
 
     BDnano.Motor.nMax_MaximalSpeedrpm         =       3000;
     BDnano.Motor.nMin_MinimalSpeedrpm         =       2300;

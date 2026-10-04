@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Running the Real Compressor Load — Why It Stalls, and What To Do</title>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#1c2331; --sub:#4b5568; --accent:#1f6feb; --accent2:#b5321f;
+    --panel:#f6f8fb; --border:#dbe2ec; --code:#eef1f6; --good:#1a7f37; --warn:#9a6700; --bad:#b5321f;
+  }
+  html,body{background:var(--bg); color:var(--ink); font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif; line-height:1.55; margin:0;}
+  .wrap{max-width:980px; margin:0 auto; padding:36px 24px 80px;}
+  h1{font-size:2.0rem; margin-bottom:.2em;}
+  h1 + p.subtitle{color:var(--sub); font-size:1.05rem; margin-top:0;}
+  h2{font-size:1.4rem; margin-top:2.6em; padding-top:.3em; border-top:1px solid var(--border);}
+  h3{font-size:1.12rem; margin-top:1.8em; color:var(--ink);}
+  p{margin:.9em 0;}
+  .callout{background:var(--panel); border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:6px; padding:14px 18px; margin:1.2em 0;}
+  .callout.good{border-left-color:var(--good);}
+  .callout.warn{border-left-color:var(--warn);}
+  .callout.bad{border-left-color:var(--bad);}
+  .callout .tag{font-weight:700; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; color:var(--sub); display:block; margin-bottom:.3em;}
+  figure{margin:1.6em 0; text-align:center;}
+  figure img{max-width:100%; border:1px solid var(--border); border-radius:6px; background:#fff;}
+  figure svg{max-width:100%; height:auto; background:#fff; border:1px solid var(--border); border-radius:6px;}
+  figcaption{color:var(--sub); font-size:.88rem; margin-top:.5em;}
+  code, .mono{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace; font-size:.92em; background:var(--code); padding:.12em .38em; border-radius:4px;}
+  pre{background:var(--code); border:1px solid var(--border); border-radius:6px; padding:14px 16px; overflow-x:auto; font-size:.86rem;}
+  pre code{background:none; padding:0;}
+  table{width:100%; border-collapse:collapse; margin:1.2em 0; font-size:.92rem;}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top;}
+  th{background:var(--panel); font-size:.82rem; text-transform:uppercase; letter-spacing:.03em; color:var(--sub);}
+  tr:hover td{background:#fafbfd;}
+  .badge{display:inline-block; font-size:.74rem; font-weight:700; padding:.15em .55em; border-radius:999px; color:#fff;}
+  .badge.tested{background:var(--good);}
+  .badge.proposed{background:var(--warn);}
+  .badge.check{background:var(--sub);}
+  ul, ol{padding-left:1.4em;}
+  li{margin:.4em 0;}
+  .toc{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:18px 22px;}
+  .toc a{color:var(--accent); text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  .toc ol{margin:.3em 0;}
+  .kicker{font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">My_1SH_FOC — internal reference</p>
+<h1>Running the Real Compressor Load — Why It Stalls, and What To Do</h1>
+<p class="subtitle">What happens when the constant 0.11&nbsp;Nm test load is swapped for the real single-cylinder compressor profile mid-run, why it stalls within ~100&nbsp;ms, and a prioritized strategy for making it survive.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+<li><a href="#problem">The problem, as observed</a></li>
+<li><a href="#profile">The load profile itself: tiny average, huge peak</a></li>
+<li><a href="#diagnosis">Root-cause diagnosis, from the actual logged signals</a></li>
+<li><a href="#why">Why a small sensorless BLDC drive is especially exposed to this</a></li>
+<li><a href="#strategy">Strategy, in priority order</a></li>
+<li><a href="#status">What's verified vs. proposed</a></li>
+</ol>
+</div>
+
+<h2 id="problem">1. The problem, as observed</h2>
+<p>The model runs the sensorless startup and holds steady around 2500&ndash;3000&nbsp;RPM cleanly with a <strong>constant</strong> 0.11&nbsp;Nm load. Switching the load (via the <code>Manual Switch</code> feeding <code>compressorLoadProfile</code>'s output into the mechanical model) over to the real, measured single-cylinder compressor torque profile while running produces about two revolutions of apparently-successful compression, then a stall.</p>
+<p>Reproducing this directly (switch triggered at t=1.2&nbsp;s, motor at ~2665&nbsp;RPM, same sensorless-closed-loop state as the working baseline) gives the same result on a clean, controlled timeline:</p>
+<figure>
+<img src="compressor_load_doc_assets/fig_rpm_collapse.png" alt="RPM collapsing to zero within about 100ms of switching to the compressor load">
+<figcaption>Fig. 1 — Real motor speed (sensor), switch instant marked. From a clean 2665&nbsp;RPM, speed is at ~188&nbsp;RPM within 50&nbsp;ms and effectively zero by 150&nbsp;ms — this is not a slow degradation, it's a near-immediate collapse.</figcaption>
+</figure>
+
+<h2 id="profile">2. The load profile itself: tiny average, huge peak</h2>
+<p>The measured profile (<code>BDN45F - Measured Cylinder Pressures.xlsx</code>, via <code>ss_load_torque_data.m</code>) looks like this over one mechanical revolution:</p>
+<figure>
+<img src="compressor_load_doc_assets/fig_profile_vs_angle.png" alt="Compressor load torque vs crank angle, showing a sharp narrow peak and a long shallow trough">
+<figcaption>Fig. 2 — Load torque vs. crank angle. Mean over one revolution: <strong>0.079&nbsp;Nm</strong> — almost identical to the 0.11&nbsp;Nm constant load that already works fine. Peak: <strong>0.637&nbsp;Nm</strong>. Minimum: <strong>&minus;0.157&nbsp;Nm</strong>.</figcaption>
+</figure>
+<p>That's a peak-to-average ratio of roughly <strong>8:1</strong> — the defining signature of a reciprocating (single-cylinder) compressor load, compared to a fan/blower-type load that's nearly constant. The motor doesn't need more <em>average</em> torque capability than it already has (it's already running fine at 0.11&nbsp;Nm, comfortably above the 0.079&nbsp;Nm average) — it needs to be able to deliver a short, sharp <em>burst</em> roughly 8&times; that average, once per revolution, and absorb a smaller negative burst right after.</p>
+
+<h2 id="diagnosis">3. Root-cause diagnosis, from the actual logged signals</h2>
+<p>Logging <code>Iq</code>, the real electrical speed/angle (<code>w_ele</code>/<code>theta_ele</code>), and the sensorless estimate (<code>we_est_next</code>/<code>theta_est_next</code>) through the switch and collapse shows a clear two-stage failure:</p>
+
+<h3>Stage 1 — current saturation</h3>
+<figure>
+<img src="compressor_load_doc_assets/fig_iq_saturation.png" alt="Iq current demand spiking past the plus/minus 15A limit within 50ms of the load switch">
+<figcaption>Fig. 3 — <code>Iq</code> around the switch. Peak demand reaches <strong>22.6&nbsp;A</strong> against a configured limit (<code>p.IqMax_A</code>) of <strong>15&nbsp;A</strong>.</figcaption>
+</figure>
+<p>The moment the compression stroke's torque ramps up, the speed/current loop asks for more current than the system is allowed (or able) to deliver. Capped at 15&nbsp;A, the motor physically cannot produce the ~0.64&nbsp;Nm the load demands at that instant — torque production falls short, and the rotor decelerates hard, immediately, with nothing in the system absorbing the shortfall.</p>
+
+<h3>Stage 2 — the sensorless estimate loses lock as speed craters</h3>
+<figure>
+<img src="compressor_load_doc_assets/fig_angle_error.png" alt="Angle tracking error between the true and estimated electrical angle, small before the collapse, then swinging wildly afterward">
+<figcaption>Fig. 4 — Angle error (true &minus; estimated). Already a non-trivial ~15&ndash;23&deg; just before the switch (consistent with the known noise/harmonic-mismatch behavior documented in <code>Observer_PLL_Explained.html</code>), it blows out past &plusmn;90&deg; within ~150&nbsp;ms of the stall starting.</figcaption>
+</figure>
+<p>Once real speed crashes well below the range the observer can track reliably (see <code>p.MinStartUpValidSpeed</code> and the whole discussion of why the observer needs a minimum back-EMF to work at all), the angle estimate itself comes unglued. At that point the Park-transform reference frame is wrong, meaning the current that <em>is</em> available may no longer even be pushing in a useful direction — compounding stage 1 rather than helping recover from it. This is why the stall, once it starts, doesn't recover on its own: it isn't just "not enough torque," it's "not enough torque, then losing the ability to apply what torque there is correctly."</p>
+
+<div class="callout bad">
+<span class="tag">Bottom line</span>
+This is a <strong>capability</strong> problem, not a tuning problem. The control loops reacted exactly as designed — they pushed current hard, it just wasn't enough, fast enough, from a standing start with zero stored energy to draw on.
+</div>
+
+<h2 id="why">4. Why a small sensorless BLDC drive is especially exposed to this</h2>
+<p>A reciprocating compressor's whole premise is that <em>something</em> in the drivetrain stores energy during the low-torque part of the cycle and gives it back during the compression stroke — normally a mechanical <strong>flywheel</strong>. Without one (or with too little rotor inertia to act as one), the motor+controller alone has to supply the full 8&times;-average peak on demand, every revolution, which is a much harder ask electrically than supplying a steady average.</p>
+
+<figure>
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .lbl{font:12px -apple-system,sans-serif; fill:#4b5568;}
+  .ttl{font:13px -apple-system,sans-serif; fill:#1c2331; font-weight:700;}
+  .ax{stroke:#8a94a6; stroke-width:1;}
+  .curveT{stroke:#b5321f; stroke-width:2; fill:none;}
+  .curveW{stroke:#1f6feb; stroke-width:2; fill:none;}
+</style>
+<text x="20" y="22" class="ttl">Without enough stored (flywheel) energy</text>
+<line x1="40" y1="130" x2="360" y2="130" class="ax"/>
+<text x="365" y="134" class="lbl">crank angle</text>
+<path d="M40,125 L140,125 L165,40 L190,125 L360,125" class="curveT"/>
+<text x="195" y="55" class="lbl" fill="#b5321f">load torque (sharp peak)</text>
+<line x1="40" y1="230" x2="360" y2="230" class="ax"/>
+<text x="365" y="234" class="lbl">speed</text>
+<path d="M40,200 L140,200 L220,290 L300,220 L360,205" class="curveW"/>
+<text x="225" y="300" class="lbl" fill="#1f6feb">speed dives, may not recover</text>
+
+<text x="420" y="22" class="ttl">With a flywheel (enough stored energy)</text>
+<line x1="440" y1="130" x2="740" y2="130" class="ax"/>
+<text x="745" y="134" class="lbl">crank angle</text>
+<path d="M440,125 L540,125 L565,40 L590,125 L740,125" class="curveT"/>
+<text x="595" y="55" class="lbl" fill="#b5321f">same load torque</text>
+<line x1="440" y1="230" x2="740" y2="230" class="ax"/>
+<text x="745" y="234" class="lbl">speed</text>
+<path d="M440,210 L540,210 L565,218 L590,208 L740,206" class="curveW"/>
+<text x="500" y="250" class="lbl" fill="#1f6feb">flywheel absorbs the pulse, speed barely moves</text>
+</svg>
+<figcaption>Fig. 5 — Same load-torque pulse, two different amounts of stored rotational energy. A flywheel converts a torque problem the motor can't instantaneously meet into a speed-ripple problem it easily can.</figcaption>
+</figure>
+
+<p>This model's motor inertia (<code>BDnano.Motor.J_Inertia = 1.512e-5 kg·m²</code>) is sized for a small nano/EV drive — not for buffering a reciprocating load. <strong>Worth checking directly: does the real target hardware have a flywheel (or enough added rotor/coupling inertia) on this shaft?</strong> If yes, it needs to be reflected in this model's inertia for the simulation to mean anything for this load case. If the real hardware genuinely has this little inertia, the strategy below becomes load-bearing rather than optional.</p>
+
+<h2 id="strategy">5. Strategy, in priority order</h2>
+
+<h3>1. Confirm (or add) mechanical energy storage — <span class="badge check">check first</span></h3>
+<p>Before any control change: find out whether the actual hardware has a flywheel or enough coupled inertia to buffer an 8:1 peak-to-average torque ratio. This is the single highest-leverage fact in this whole investigation — if it's missing, no amount of current-loop tuning fixes a problem that's fundamentally "not enough stored energy to coast through the stroke." If it exists physically but isn't in this Simscape model, add it to the plant's inertia before judging any other fix by simulation results.</p>
+
+<h3>2. Feed-forward the known torque profile into Iqref — <span class="badge proposed">proposed, not yet tested</span></h3>
+<p>The load profile is a fixed, known function of crank angle (not a random disturbance) — exactly the situation feed-forward control is built for. Right now, the speed-loop PI only reacts <em>after</em> speed has already sagged. Adding the expected torque directly to the current reference, synchronized to the measured/estimated angle, lets current start rising in anticipation of the stroke instead of in response to its damage:</p>
+
+<figure>
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .box{fill:#f6f8fb; stroke:#dbe2ec; stroke-width:1.5; rx:6;}
+  .lbl2{font:13px -apple-system,sans-serif; fill:#1c2331;}
+  .sub2{font:11px -apple-system,sans-serif; fill:#4b5568;}
+  .arr{stroke:#4b5568; stroke-width:1.6; fill:none; marker-end:url(#ah);}
+</style>
+<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#4b5568"/></marker></defs>
+<rect x="30" y="40" width="150" height="50" class="box"/>
+<text x="105" y="60" text-anchor="middle" class="lbl2">Speed loop PI</text>
+<text x="105" y="76" text-anchor="middle" class="sub2">(reactive, slow)</text>
+
+<rect x="30" y="150" width="150" height="50" class="box"/>
+<text x="105" y="170" text-anchor="middle" class="lbl2">Load-torque LUT</text>
+<text x="105" y="186" text-anchor="middle" class="sub2">vs. crank angle (known)</text>
+
+<path d="M180,65 L330,110" class="arr"/>
+<path d="M180,175 L330,125" class="arr"/>
+<circle cx="340" cy="117" r="16" fill="#fff" stroke="#4b5568" stroke-width="1.5"/>
+<text x="340" y="122" text-anchor="middle" class="lbl2">+</text>
+
+<path d="M356,117 L470,117" class="arr"/>
+<rect x="470" y="92" width="150" height="50" class="box"/>
+<text x="545" y="112" text-anchor="middle" class="lbl2">Iqref</text>
+<text x="545" y="128" text-anchor="middle" class="sub2">feeds current loop</text>
+
+<path d="M620,117 L690,117" class="arr"/>
+<text x="695" y="122" class="sub2">to ss_pi_controller</text>
+
+<text x="60" y="230" class="sub2">theta_est / theta_ele &rarr; indexes the LUT every step, same angle the real load is at</text>
+</svg>
+<figcaption>Fig. 6 — Feed-forward concept: the speed loop still does its normal job correcting residual error, but the current reference no longer has to wait for a speed error to develop before reacting to a disturbance that was entirely predictable in advance.</figcaption>
+</figure>
+<p>Caveat worth stating plainly: feed-forward reduces <em>how much</em> the speed loop has to react and <em>how late</em>, but it doesn't change the <em>peak current</em> the motor must ultimately supply — if 22.6&nbsp;A is genuinely needed and the limit is a hard 15&nbsp;A ceiling (thermal, hardware, or shunt-sensing range), feed-forward alone won't be enough. It's a strong complement to item 1, not a substitute for it.</p>
+
+<h3>3. Check whether 15&nbsp;A is a real hardware ceiling or just a conservative setting — <span class="badge check">check</span></h3>
+<p><code>p.IqMax_A = 15</code> and the demand peaked at 22.6&nbsp;A — a 50% shortfall. Worth separately checking two different limits that could each be the real ceiling:</p>
+<ul>
+<li><strong>Current limit</strong>: is 15&nbsp;A a true hardware/thermal/shunt-sensing-range limit (<code>p.MaxReadableCurrent_A</code>), or a conservative application-level setting that has headroom to raise?</li>
+<li><strong>Voltage limit</strong>: at ~2665&nbsp;RPM, back-EMF is already a meaningful fraction of the 12&nbsp;V bus (<code>p.VphaseMaxLinear ≈ 6.93&nbsp;V</code> is not a lot of headroom on a 12&nbsp;V system). If the current loop is also voltage-saturated at this speed, raising <code>IqMax_A</code> alone won't help — the duty cycle has nowhere left to go to push more current through the inductance in time. This needs checking directly (log the modulation index / duty cycle through the same transient) before concluding more current headroom is the fix.</li>
+</ul>
+
+<h3>4. Ramp the load profile's amplitude in gradually, not as a step — <span class="badge proposed">proposed, secondary</span></h3>
+<p>Switching from constant to full-amplitude compressor load in one step presents the entire 8:1 peak instantly, with the control loops in whatever state they happened to be in. Blending the profile's amplitude in over a handful of revolutions (0% &rarr; 100%) gives the loops (and any feed-forward) a chance to adapt progressively rather than being hit cold. This won't fix a fundamental capability shortfall (items 1&ndash;3), but it's cheap to add and removes "a transient none of the loops were prepared for" as a confounding factor when testing the other items.</p>
+
+<h3>5. Re-check speed-loop bandwidth against the once-per-revolution disturbance frequency — <span class="badge check">check</span></h3>
+<p>At ~2665&nbsp;RPM the mechanical revolution rate is ~44&nbsp;Hz — the load disturbance repeats at that rate. <code>p.SpeedLoopFreq_Hz=2083</code> gives plenty of raw execution rate, but the loop's effective <em>closed-loop bandwidth</em> (set by <code>Speed_Kp</code>/<code>Speed_Ki</code>) is what actually matters for tracking a 44&nbsp;Hz disturbance — worth confirming it's not the limiting factor once items 1&ndash;3 are addressed, same "bandwidth vs. disturbance frequency" framing as the PLL discussion in <code>Observer_PLL_Explained.html</code>.</p>
+
+<h2 id="status">6. What's verified vs. proposed</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Basis</th></tr>
+<tr><td>Stall is caused by current saturation at the compression peak</td><td><span class="badge tested">tested</span></td><td>Directly measured: 22.6&nbsp;A demanded vs. 15&nbsp;A limit, at the exact moment of collapse.</td></tr>
+<tr><td>Sensorless angle tracking loses lock as a secondary, compounding effect</td><td><span class="badge tested">tested</span></td><td>Directly measured: angle error grows from ~20&deg; to &gt;90&deg; within ~150&nbsp;ms of the speed collapse starting.</td></tr>
+<tr><td>Load profile's peak-to-average ratio is ~8:1</td><td><span class="badge tested">tested</span></td><td>Computed directly from <code>ss_load_torque_data.m</code>'s output: mean 0.079&nbsp;Nm, peak 0.637&nbsp;Nm.</td></tr>
+<tr><td>A flywheel / added inertia would fix this</td><td><span class="badge proposed">proposed</span></td><td>Standard practice for reciprocating-load drives; not yet tested in this model (would require changing <code>J_Inertia</code> and re-running).</td></tr>
+<tr><td>Feed-forward torque compensation would help</td><td><span class="badge proposed">proposed</span></td><td>Sound in principle for a known, angle-synchronous disturbance; not yet implemented or tested here.</td></tr>
+<tr><td>15&nbsp;A is the real ceiling (vs. voltage-limited)</td><td><span class="badge check">not yet checked</span></td><td>Needs a modulation-index/duty-cycle log through the same transient to confirm which limit actually binds first.</td></tr>
+</table>
+
+<div class="callout good">
+<span class="tag">Suggested next step</span>
+Check item 1 (real hardware flywheel/inertia) first — it's a five-minute question that determines whether this is fundamentally a controls problem or a mechanical-design fact to work within. In parallel, logging the modulation index through the same transient (item 3) would settle whether raising the current limit is even physically possible before investing effort in feed-forward control.
+</div>
+
+</div>
+</body>
+</html>
