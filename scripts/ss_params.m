@@ -175,7 +175,7 @@ p.SpeedLoopFreq_Hz = 2083;                                    % SPEED_LOOP_FREQU
 p.SpeedExecRate = round(p.PwmFreq_Hz / p.SpeedLoopFreq_Hz);   % current-loop periods per speed-loop tick
 p.SpeedTs = p.Ts * p.SpeedExecRate;                           % speed loop's own sample time, seconds
 
-p.Speed_Kp = 2426; p.Speed_Ki = 476; p.Speed_KpDiv = 16; p.Speed_KiDiv = 1024; % PID_SPEED_KP/KI_DEFAULT, SP_KPDIV/KIDIV
+p.Speed_Kp = 2426/2; p.Speed_Ki = 476/2; p.Speed_KpDiv = 16; p.Speed_KiDiv = 1024; % PID_SPEED_KP/KI_DEFAULT, SP_KPDIV/KIDIV
 
 % SPEED_UNIT = U_01HZ = mechanical speed in units of 0.1 Hz; 1 unit =
 % U_RPM/SPEED_UNIT = 60/10 = 6 RPM (SPEED_UNIT_2_RPM). Converts wmech
