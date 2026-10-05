@@ -86,7 +86,7 @@ p.PI_IntegUpper = 32767 * 16384; p.PI_IntegLower = -32767 * 16384;      % wUpper
 %% Motor/stator electrical parameters (Inc/pmsm_motor_parameters.h,
 %% Inc/power_stage_parameters.h) - for ss_stator_model.m, a bench-test
 %% stand-in for the real motor (see that file's header for scope/caveats)
-p.MotorRS = 0.30;      % 0.15 ohm     (RS)
+p.MotorRS = 0.17;      % 0.15 ohm     (RS)
 p.MotorLS = 160e-6;  %  0.329e-3 henries (LS)
 p.Vbus    = 12;        % 32 volts   (NOMINAL_BUS_VOLTAGE_V)
 % p.VphaseMax = p.Vbus / sqrt(3); % max fundamental per-unit=1 phase voltage
@@ -221,8 +221,8 @@ p.STO_G1 = -24227/16384; % GAIN1/F1
 a_ei = 1 - p.Ts*p.MotorRS/p.MotorLS + p.STO_G1;
 b_ei = -p.Ts/p.MotorLS;
 targetEig_sto = (a_ei + 1) / 2;
-p.STO_G2 = (a_ei - targetEig_sto^2) / b_ei; % V/A
-
+% p.STO_G2 = (a_ei - targetEig_sto^2) / b_ei; % V/A
+p.STO_G2 = 0.2;
 %% STO-PLL Stage 2: PLL loop filter (ss_pll_step.m). Firmware's own
 %% PLL_KP_GAIN=449/PLL_KI_GAIN=20 (PLL_KPDIV=16384/PLL_KIDIV=65535) operate
 %% on the phase-detector error in the firmware's internal Q15 "Bemf-digit"
@@ -266,7 +266,7 @@ p.STO_G2 = (a_ei - targetEig_sto^2) / b_ei; % V/A
 % this is the current balance point between "fast enough to lock on within
 % the real align/ramp window" and "slow enough to reject real-world
 % current-reconstruction/PWM ripple."
-p.PLL_BemfPeak_V =7.48;%6.568; % max(BEMF_shape_V) from ss_bemf_data.m, at p.BemfRefWe
+p.PLL_BemfPeak_V =3;%7.48;%6.568; % max(BEMF_shape_V) from ss_bemf_data.m, at p.BemfRefWe
 pll_zeta = 0.707;
 pll_wn   = 2*pi*30; % rad/s, ~30 Hz PLL bandwidth
 
