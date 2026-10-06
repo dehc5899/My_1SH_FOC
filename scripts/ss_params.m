@@ -310,8 +310,8 @@ timingRelaxed = true;        % local on purpose - NOT a field of p
 if timingRelaxed
     st = p.TicksPerFastStep;          % 170 ticks = 1 fast step = 1 us
 
-    p.TSample  = 2*st;                % was 41   -> trig1 sits 2 steps before the mid edge
-    p.hTADConv = 2*st;                % was 64
+    p.TSample  = 4*st;                % was 41   -> trig1 sits 2 steps before the mid edge
+    p.hTADConv = 4*st;                % was 64
     p.TDead    = 1*st;                % was 170  - already exactly 1 step
     p.TAfter   = 2*st;                % was 374  -> trig2 sits 2 steps after the mid edge
     p.TMin     = p.TAfter + p.TSample;        % 680 ticks = 4 fast steps
