@@ -131,6 +131,9 @@ p.LoadTorqueMag =    0.15;   % N*m braking magnitude, always opposes rotation
 p.UseFixedLoad =        0;   % 1 = Use the fixed constant torque, 0 = Use the dynamic scaled load torque from the Mechanics block
 p.LoadScalingFactor=  0.5;   % Set to 1.0 for full torque, 0.5 for half torque, 0.0 to nullify it
 p.loadRampSlope=        1;   % rate of incresase of load
+
+%------FF Parameters------%
+p.FFcontrol_en =1;
 %% Measured back-EMF reference speed (ss_bemf_data.m, ss_bemf_lookup.m)
 % Profile measured at 1000 RPM mechanical = 1000/60*POLE_PAIR_NUM Hz
 % electrical (works out to exactly 50 Hz - the same fe used as this

@@ -114,7 +114,7 @@ end
     annotation('textbox', [0.78, 0.09, 0.2, 0.1], 'String', stats_str_w, 'FitBoxToText', 'on');
 xlabel('Time (s)')
 ax = figure(2).CurrentAxes;
-ax.XTick = 0:0.007:0.6; % ticks every 7 ms instead of default
+ax.XTick = -0.2:0.01:0.6; % ticks every 100 ms instead of default
 ylabel('Amplitude (I)')
 title(['Current Waveforms : ', folderPath], 'Interpreter', 'none');
 legend('show')
