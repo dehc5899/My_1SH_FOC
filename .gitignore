@@ -33,7 +33,7 @@ slprj/
 *.fig~ 
 *.original
 
-f# --- Simulink data inspector / reports ---
+# --- Simulink data inspector / reports ---
 *.mldatx
 *.pdf
 
