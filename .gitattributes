@@ -1,4 +1,4 @@
-*.slx -crlf -diff -merge
+*.slx diff=slx -crlf -merge
 *.mdl -crlf -diff -merge
 *.mat -crlf -diff -merge
 *.mlx -crlf -diff -merge
