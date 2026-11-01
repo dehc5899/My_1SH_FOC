@@ -1,7 +1,7 @@
 clc;
 clear all;
 %addpath('bemf_profile');
-modelName = 'FOC_ctrl'; 
+modelName = 'FOC_core'; 
 % Check if the model is already loaded in memory; if not, load it quietly
 if ~bdIsLoaded(modelName)
     load_system(modelName); 

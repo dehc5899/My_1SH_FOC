@@ -118,22 +118,22 @@ p.ThetaOffset_rad = -pi/2;
 %% _FINAL_SPEED_UNIT / _FINAL_CURRENT_A, TRANSITION_DURATION)
 p.Startup_T   = [0.200, 0.220, 0.620, 0.621, 0.622, 0.623];   % cumulative breakpoints, if inertia of rotor changes or the rotor start angle changes then make alignment time to 0.200
 p.Startup_RPM = [0 0 0 2500 2510 2520 2530];          % mechanical rpm at 0,T1..T5
-p.Startup_Id_A = 10;      % PHASE1_FINAL_CURRENT_A - align, pure d
-p.Startup_Iq_Breakaway_A = 12; % Phase 2 initial breakaway current (q-axis)
-p.Startup_Iq_A = 12;      % PHASE2..5_FINAL_CURRENT_A - ramp, pure q
+p.Startup_Id_A = 4;      % PHASE1_FINAL_CURRENT_A - align, pure d
+p.Startup_Iq_Breakaway_A = 5; % Phase 2 initial breakaway current (q-axis)
+p.Startup_Iq_A = 4;      % PHASE2..5_FINAL_CURRENT_A - ramp, pure q
 p.Startup_TransitionDuration = 0.025;
 
 %------Test Parameters------%
 p.Idref_A=0;
-p.Iqref_A=2;    % negative Iq can turn the motor in negative direction
+p.Iqref_A=10;    % negative Iq can turn the motor in negative direction
 %------Load Parameters------%
-p.LoadTorqueMag =    0.15;   % N*m braking magnitude, always opposes rotation
-p.UseFixedLoad =        0;   % 1 = Use the fixed constant torque, 0 = Use the dynamic scaled load torque from the Mechanics block
+p.LoadTorqueMag =    0.01;   % N*m braking magnitude, always opposes rotation
+p.UseFixedLoad =        1;   % 1 = Use the fixed constant torque, 0 = Use the dynamic scaled load torque from the Mechanics block
 p.LoadScalingFactor=    1;   % Set to 1.0 for full torque, 0.5 for half torque, 0.0 to nullify it
 p.loadRampSlope=        1;   % rate of incresase of load
 
 %------FF Parameters------%
-p.FFcontrol_en =1;
+p.FFcontrol_en =0;
 %% Measured back-EMF reference speed (ss_bemf_data.m, ss_bemf_lookup.m)
 % Profile measured at 1000 RPM mechanical = 1000/60*POLE_PAIR_NUM Hz
 % electrical (works out to exactly 50 Hz - the same fe used as this
