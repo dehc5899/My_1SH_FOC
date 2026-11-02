@@ -14,7 +14,7 @@ function p = ss_params()
 % discrete Simulink model without unit confusion.
 
 %% Clocks
-p.AdvTimClk_Hz = 170e6;   % ADV_TIM_CLK_MHz
+p.AdvTimClk_Hz = 128e6;   % ADV_TIM_CLK_MHz
 p.AdcClk_Hz    = 42e6;    % ADC_CLK_MHz
 
 %% PWM / execution rate
@@ -38,7 +38,7 @@ p.AdcSarCycles          = 12.5;  % ADC_SAR_CYCLES
 p.TSample  = floor((p.AdcTrigConvLatencyCyc + p.AdcSamplingCycles) * p.AdvTimClk_Hz / p.AdcClk_Hz) + 1; % TBEFORE
 p.hTADConv = floor((p.AdcSarCycles + p.AdcTrigConvLatencyCyc) * p.AdvTimClk_Hz / p.AdcClk_Hz);           % hTADConv
 
-p.DeadTime_ns = 1000;   %old=750 SW_DEADTIME_NS
+p.DeadTime_ns = 2000;   %old=750 SW_DEADTIME_NS
 p.TNoise_ns   = 1200;  % TNOISE_NS (= MAX_TNTR_NS)
 p.TRise_ns    = 61;    % TRISE_NS
 
@@ -311,12 +311,12 @@ p.MinStartUpValidSpeed =OBS_MINIMUM_SPEED_RPM*(2*pi/60) * 3;% observer output is
 timingRelaxed = true;        % local on purpose - NOT a field of p
 
 if timingRelaxed
-    st = p.TicksPerFastStep;          % 170 ticks = 1 fast step = 1 us
+    st = p.TicksPerFastStep;          % 128 ticks = 1 fast step = 1 us
 
-    p.TSample  = 4*st;                % was 41   -> trig1 sits 2 steps before the mid edge
-    p.hTADConv = 4*st;                % was 64
-    p.TDead    = 1*st;                % was 170  - already exactly 1 step
-    p.TAfter   = 2*st;                % was 374  -> trig2 sits 2 steps after the mid edge
+    p.TSample  = 4*st;                % 1   -> trig1 sits 2 steps before the mid edge
+    p.hTADConv = 4*st;                % 
+    p.TDead    = 2*st;                % 128*2  - already exactly 2 step=2micro sec
+    p.TAfter   = 2*st;                % 
     p.TMin     = p.TAfter + p.TSample;        % 680 ticks = 4 fast steps
 
     p.DeadTimeFastSteps = round(p.TDead / p.TicksPerFastStep);      % = 1
