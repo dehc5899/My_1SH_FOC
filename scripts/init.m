@@ -17,6 +17,11 @@ if ~exist(cacheDir, 'dir')
     mkdir(cacheDir);
 end
 Simulink.fileGenControl('set', 'CacheFolder', cacheDir, 'CodeGenFolder', cacheDir);
+%............code generation............%
+prj = currentProject;
+genDir = fullfile(prj.RootFolder, 'generated');
+if ~exist(genDir, 'dir'), mkdir(genDir); end
+Simulink.fileGenControl('set', 'CodeGenFolder', genDir, 'createDir', true);
 %............Select the PRODUCT............%
 Option.Product        = 4; % 1 = BDnano 2740, 2 = XX, 3 = BDnanoLite1, 4= BDnanaoLite 3000 (0 = BDnano 2740 with Trapedoidal BEMF)
 
