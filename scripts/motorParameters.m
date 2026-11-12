@@ -134,6 +134,7 @@ elseif Option.Product == 4
     % Lq=𝐿𝑠+𝑀𝑠-3/2𝐿m (q-axis inductance)=171.5e-6
     BDnano.Motor.Ld                           =43.5e-6;   % received Ld frm a colleague
     BDnano.Motor.Lq                           =148.5e-6;  % received Lq frm a colleague
+    BDnano.Motor.Lambda                       =4.33e-3;   %λ 4.33 mWb permanent-magnet flux linkage
     BDnano.Motor.Kt                           =0.021;     % torque constant of 0.021 N/Apeak or 0.0298 Nm/Arms
     BDnano.Motor.Ke                           =0.04954;     %K_e =0.014954  V/(rad/s),  datasheet=0.022 V/(rad/s) or 2.82 Vrms/Krpm
 
